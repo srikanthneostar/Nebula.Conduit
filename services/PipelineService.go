@@ -7,6 +7,7 @@ import (
 type PipelineService struct {
 	pipelines *[]framework.Pipeline
 }
+
 func NewPipelineService() *PipelineService {
 	return &PipelineService{
 		pipelines: &[]framework.Pipeline{},
@@ -19,10 +20,11 @@ func (s *PipelineService) AddPipeline(pipeline *framework.Pipeline) error {
 	*s.pipelines = append(*s.pipelines, *pipeline)
 	return nil
 }
-
-func (s *PipelineService) Execute() error {
-	for _, pipeline := range *s.pipelines {
-		pipeline.Execute()
+func (s *PipelineService) Execute() {
+	pipelines := *s.pipelines
+	for _, pipeline := range pipelines {
+		go func(p *framework.Pipeline) {
+			p.Execute()
+		}(&pipeline)
 	}
-	return nil
 }
