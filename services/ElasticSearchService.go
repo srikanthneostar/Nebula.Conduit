@@ -100,7 +100,7 @@ func NewElasticSearchService(config elasticsearch.Config) (*ElasticSearchService
 }
 
 // VectorSearchWithQuery performs a vector similarity search in Elasticsearch with additional text query
-func (es *ElasticSearchService) VectorSearchWithQuery(ctx context.Context, index string, vector []float32, query string, size int) ([]VectorSearchResult, error) {
+func (es *ElasticSearchService) VectorSearchWithQuery(ctx context.Context, index string, vector []float64, query string, size int) ([]VectorSearchResult, error) {
 	// Construct the search query
 	searchQuery := map[string]interface{}{
 		"size": size,
