@@ -10,14 +10,14 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/elastic/go-elasticsearch"
+	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/tmc/langchaingo/llms/ollama"
 )
 
 func searchSimilarDocuments(question string) error {
 	// Generate embedding for the question
 	es, err := elasticsearch.NewClient(elasticsearch.Config{
-		Addresses: []string{"http://192.168.1.233:9200/"},
+		Addresses: []string{"http://192.168.1.232:9200/"},
 		Transport: &http.Transport{
 			DialContext: (&net.Dialer{
 				Timeout: 30 * time.Second, // Increase timeout

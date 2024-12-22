@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"Nebula.Conduit/framework"
-	"github.com/elastic/go-elasticsearch"
+	"github.com/elastic/go-elasticsearch/v8"
 )
 
 type Embedings struct{}
