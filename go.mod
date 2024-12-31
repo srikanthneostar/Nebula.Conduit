@@ -17,6 +17,7 @@ require (
 )
 
 require (
+	github.com/DataIntelligenceCrew/go-faiss v0.2.0
 	github.com/dlclark/regexp2 v1.10.0 // indirect
 	github.com/elastic/elastic-transport-go/v8 v8.6.0 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
