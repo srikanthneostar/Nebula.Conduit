@@ -20,8 +20,9 @@ type OllamaEmbeddingService struct {
 
 func NewEmbeddingService(ollamaUrl string, model string) EmbeddingService {
 	return &OllamaEmbeddingService{
-		OllamaUrl: ollamaUrl,
-		Model:     model,
+		OllamaUrl:      ollamaUrl,
+		Model:          model,
+		PersistentPath: "./db",
 	}
 }
 
