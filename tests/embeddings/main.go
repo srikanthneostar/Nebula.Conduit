@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 
 	"Nebula.Conduit/stages"
@@ -13,12 +14,13 @@ func main() {
 	// Create test input data
 	inputData := map[string]interface{}{
 		"index":      "nebulastore",
-		"filter":     `{"term": {"has_embedding": false}}`,
+		"filter":     `{"query": {"match_all": {}}}`,
 		"collection": "journalevents",
 	}
-
+	fmt.Println(inputData)
 	// Serialize input data to JSON
 	inputJSON, err := json.Marshal(inputData)
+	fmt.Println(inputJSON)
 	if err != nil {
 		log.Fatalf("Failed to marshal input data: %v", err)
 	}
