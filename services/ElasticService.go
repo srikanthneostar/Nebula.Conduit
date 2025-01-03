@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/elastic/go-elasticsearch/v8"
+	"github.com/elastic/go-elasticsearch/v7"
 )
 
 type ElasticService struct {
@@ -70,15 +70,21 @@ func (es *ElasticService) SearchByCondition(index string, query map[string]inter
 		return nil, err
 	}
 
+	// Add compatibility headers
 	res, err := es.client.Search(
 		es.client.Search.WithContext(context.Background()),
 		es.client.Search.WithIndex(index),
 		es.client.Search.WithBody(&buf),
+		es.client.Search.WithHeader(map[string]string{
+			"Accept":       "application/json",
+			"Content-Type": "application/json",
+		}),
 	)
 
 	if err != nil {
 		return nil, err
 	}
+
 	defer res.Body.Close()
 
 	var result map[string]interface{}

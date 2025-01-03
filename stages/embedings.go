@@ -80,6 +80,7 @@ func (e *Embedings) Execute(input io.Reader) error {
 
 	return nil
 } // Output implements framework.Stage.
+
 func (e *Embedings) Output() io.Reader {
 	panic("unimplemented")
 }

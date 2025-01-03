@@ -14,7 +14,7 @@ func main() {
 	inputData := map[string]interface{}{
 		"index":      "nebulastore",
 		"filter":     `{"term": {"has_embedding": false}}`,
-		"collection": "documents",
+		"collection": "journalevents",
 	}
 
 	// Serialize input data to JSON
