@@ -7,63 +7,79 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strings"
+	"runtime"
 
 	"Nebula.Conduit/framework"
-	"github.com/elastic/go-elasticsearch/v8"
+	"Nebula.Conduit/services"
+	"github.com/philippgille/chromem-go"
 )
 
 type Embedings struct{}
 
 // Execute implements framework.Stage.
+// Execute implements the Execute method of the framework.Stage interface.
+// It reads input data from the provided io.Reader, processes the data using
+// Elasticsearch and an embedding service, and returns any errors that occur
+// during the execution.
 func (e *Embedings) Execute(input io.Reader) error {
-	// Create Elasticsearch client
-	es, err := elasticsearch.NewDefaultClient()
-	if err != nil {
-		return fmt.Errorf("error creating elasticsearch client: %v", err)
-	}
 
-	// Create LLM client
-	client := llm.NewClient("http://localhost:11434")
+	// Create Elasticsearch client
+	elasticService := services.NewElasticService([]string{"http://192.168.1.232:9200"})
 
 	// Read input data
 	data, err := io.ReadAll(input)
 	if err != nil {
 		return fmt.Errorf("error reading input: %v", err)
 	}
+	// Parse input data
+	var inputData map[string]interface{}
+	if err := json.Unmarshal(data, &inputData); err != nil {
+		return fmt.Errorf("error unmarshaling data: %v", err)
+	}
 
-	// Generate embeddings
-	embedding, err := client.CreateEmbedding(context.Background(), string(data))
+	index := inputData["index"].(string)
+	filter := inputData["filter"].(string)
+	var filterData map[string]interface{}
+	if err := json.Unmarshal([]byte(filter), &filterData); err != nil {
+		return fmt.Errorf("error unmarshaling filter: %v", err)
+	}
+
+	results, err := elasticService.SearchByCondition(index, filterData)
 	if err != nil {
-		return fmt.Errorf("error generating embedding: %v", err)
+		return fmt.Errorf("error searching Elasticsearch: %v", err)
 	}
 
-	// Prepare document for Elasticsearch
-	doc := map[string]interface{}{
-		"content":   string(data),
-		"embedding": embedding,
+	embedingService := services.NewEmbeddingService("http://192.168.1.10:11434", "phi3")
+	embedingCollection := inputData["collection"].(string)
+	embedingDocument := embedingService.GetCollection(embedingCollection)
+
+	var docs []chromem.Document
+
+	for _, result := range results {
+		fmt.Println(result)
+		d, err := json.Marshal(result)
+		if err != nil {
+			return fmt.Errorf("error marshaling result: %v", err)
+		}
+		metadata := make(map[string]string)
+		for k, v := range result {
+			metadata[k] = fmt.Sprintf("%v", v)
+		}
+
+		docs = append(docs, chromem.Document{
+			ID:       result["id"].(string),
+			Metadata: metadata,
+			Content:  string(d),
+		})
+
 	}
 
-	// Convert doc to JSON
-	jsonDoc, err := json.Marshal(doc)
-	if err != nil {
-		return fmt.Errorf("error marshaling document: %v", err)
-	}
+	ctx := context.Background()
 
-	// Index document in Elasticsearch
-	_, err = es.Index(
-		"embeddings",
-		strings.NewReader(string(jsonDoc)),
-		es.Index.WithRefresh("true"),
-	)
-	if err != nil {
-		return fmt.Errorf("error indexing document: %v", err)
-	}
+	embedingDocument.AddDocuments(ctx, docs, runtime.NumCPU())
 
 	return nil
-}
-
-// Output implements framework.Stage.
+} // Output implements framework.Stage.
 func (e *Embedings) Output() io.Reader {
 	panic("unimplemented")
 }
