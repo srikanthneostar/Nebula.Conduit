@@ -10,15 +10,15 @@ func CreateEmbedingsPipeline() (*framework.Pipeline, interface{}) {
 	pipeline.Continues = true
 
 	type InputData struct {
-		Index      string `json:"index"`
-		Filter     string `json:"filter"`
-		Collection string `json:"collection"`
-		LastReadID int    `json:"lastreadid"`
+		Index      string                 `json:"index"`
+		Filter     map[string]interface{} `json:"filter"`
+		Collection string                 `json:"collection"`
+		LastReadID int                    `json:"lastreadid"`
 	}
 
 	inputData := InputData{
 		Index:      "nebulastore",
-		Filter:     `{"query": {"match_all": {}}}`,
+		Filter:     map[string]interface{}{"query": map[string]interface{}{"match_all": struct{}{}}},
 		Collection: "journalevents",
 		LastReadID: 0,
 	}

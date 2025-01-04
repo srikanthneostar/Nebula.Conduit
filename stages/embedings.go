@@ -40,16 +40,19 @@ func (e *Embedings) Execute(input io.Reader) error {
 	}
 
 	index := inputData["index"].(string)
-	filter := inputData["filter"].(string)
+	filter := inputData["filter"].(map[string]interface{})
 	// var filterData map[string]interface{}
 	// if err := json.Unmarshal([]byte(filter), &filterData); err != nil {
 	// 	return fmt.Errorf("error unmarshaling filter: %v", err)
 	// }
 
-	results, err := elasticService.SearchByCondition(index, filter)
+	// Instead of passing the whole filter
+	results, err := elasticService.SearchByCondition(index, filter["query"])
+
 	if err != nil {
 		return fmt.Errorf("error searching Elasticsearch: %v", err)
 	}
+	fmt.Println("printing res -->", results)
 
 	embedingService := services.NewEmbeddingService("http://192.168.1.10:11434", "phi3")
 	embedingCollection := inputData["collection"].(string)

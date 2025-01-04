@@ -75,10 +75,6 @@ func (es *ElasticService) SearchByCondition(index string, query any) ([]map[stri
 		es.client.Search.WithContext(context.Background()),
 		es.client.Search.WithIndex(index),
 		es.client.Search.WithBody(&buf),
-		es.client.Search.WithHeader(map[string]string{
-			"Accept":       "application/json",
-			"Content-Type": "application/json",
-		}),
 	)
 
 	if err != nil {
