@@ -12,7 +12,9 @@ import (
 	"strings"
 
 	"Nebula.Conduit/framework"
+	"Nebula.Conduit/models"
 	"Nebula.Conduit/services"
+	"Nebula.Conduit/utilities"
 	"github.com/philippgille/chromem-go"
 )
 
@@ -34,20 +36,20 @@ func (e *Embedings) Execute(input io.Reader) error {
 		return fmt.Errorf("error reading input: %v", err)
 	}
 	// Parse input data
-	var inputData map[string]interface{}
+	var inputData models.EventsInputData
 	if err := json.Unmarshal(data, &inputData); err != nil {
 		return fmt.Errorf("error unmarshaling data: %v", err)
 	}
 
-	index := inputData["index"].(string)
-	filter := inputData["filter"].(map[string]interface{})
+	index := inputData.Index
+	filter := utilities.GetEventsFilterCondition(inputData.LastReadID)
 	// var filterData map[string]interface{}
 	// if err := json.Unmarshal([]byte(filter), &filterData); err != nil {
 	// 	return fmt.Errorf("error unmarshaling filter: %v", err)
 	// }
 
 	// Instead of passing the whole filter
-	results, err := elasticService.SearchByCondition(index, filter["query"])
+	results, err := elasticService.SearchByCondition(index, filter)
 
 	if err != nil {
 		return fmt.Errorf("error searching Elasticsearch: %v", err)
@@ -55,7 +57,7 @@ func (e *Embedings) Execute(input io.Reader) error {
 	fmt.Println("printing res -->", results)
 
 	embedingService := services.NewEmbeddingService("http://192.168.1.10:11434", "phi3")
-	embedingCollection := inputData["collection"].(string)
+	embedingCollection := inputData.Collection
 	embedingDocument := embedingService.GetCollection(embedingCollection)
 
 	var docs []chromem.Document
