@@ -1,8 +1,14 @@
 package framework
 
+import (
+	"context"
+	"strings"
+)
+
 // Pipeline represents a data pipeline
 type Pipeline struct {
-	stages []Stage
+	stages    []Stage
+	Continues bool
 }
 
 // NewPipeline returns a new pipeline
@@ -16,10 +22,11 @@ func (p *Pipeline) AddStage(stage Stage) {
 }
 
 // Execute executes the pipeline
-func (p *Pipeline) Execute() {
+func (p *Pipeline) Execute(ctx context.Context) {
 	for i, stage := range p.stages {
 		if i == 0 {
-			stage.Execute(nil)
+			input := ctx.Value("input").(string)
+			stage.Execute(strings.NewReader(input))
 		} else {
 			prevStage := p.stages[i-1]
 			stage.Execute(prevStage.Output())
