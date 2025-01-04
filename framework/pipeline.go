@@ -1,7 +1,7 @@
 package framework
 
 import (
-	"context"
+	"encoding/json"
 	"strings"
 )
 
@@ -22,11 +22,19 @@ func (p *Pipeline) AddStage(stage Stage) {
 }
 
 // Execute executes the pipeline
-func (p *Pipeline) Execute(ctx context.Context) {
+func (p *Pipeline) Execute(ctx interface{}) {
 	for i, stage := range p.stages {
 		if i == 0 {
-			input := ctx.Value("input").(string)
-			stage.Execute(strings.NewReader(input))
+
+			if ctx != nil {
+				inputData, err := json.Marshal(ctx)
+				if err != nil {
+					panic(err)
+				}
+
+				stage.Execute(strings.NewReader(string(inputData)))
+			}
+
 		} else {
 			prevStage := p.stages[i-1]
 			stage.Execute(prevStage.Output())

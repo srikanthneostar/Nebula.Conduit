@@ -60,7 +60,7 @@ func NewElasticService(addresses []string) *ElasticService {
 //   - []map[string]interface{}: Slice of documents matching the query
 //   - error: Any error encountered during the search operation
 
-func (es *ElasticService) SearchByCondition(index string, query map[string]interface{}) ([]map[string]interface{}, error) {
+func (es *ElasticService) SearchByCondition(index string, query any) ([]map[string]interface{}, error) {
 	var buf bytes.Buffer
 	searchQuery := map[string]interface{}{
 		"query": query,

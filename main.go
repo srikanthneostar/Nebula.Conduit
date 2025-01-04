@@ -11,9 +11,12 @@ import (
 
 func main() {
 	ctx := context.Background()
+
 	pipelineService := services.NewPipelineService(ctx)
-	pipelineService.AddPipeline(spouts.CsvToJsonPipeline())
-	pipelineService.AddPipeline(spouts.CreateEmbedingsPipeline(ctx))
+	pipeline, newCtx := spouts.CreateEmbedingsPipeline()
+
+	//pipelineService.AddPipeline(spouts.CsvToJsonPipeline())
+	pipelineService.AddPipeline(pipeline)
 	// pipelineService.AddPipeline(spouts.NewEventsItenlligence())
-	pipelineService.Execute(ctx)
+	pipelineService.Execute(newCtx)
 }

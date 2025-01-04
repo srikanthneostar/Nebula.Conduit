@@ -8,13 +8,15 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"strconv"
+	"strings"
 
 	"Nebula.Conduit/framework"
 	"Nebula.Conduit/services"
 	"github.com/philippgille/chromem-go"
 )
 
-type Embedings struct{}
+type Embedings struct{ lastReadId *int }
 
 // Execute implements framework.Stage.
 // Execute implements the Execute method of the framework.Stage interface.
@@ -39,12 +41,12 @@ func (e *Embedings) Execute(input io.Reader) error {
 
 	index := inputData["index"].(string)
 	filter := inputData["filter"].(string)
-	var filterData map[string]interface{}
-	if err := json.Unmarshal([]byte(filter), &filterData); err != nil {
-		return fmt.Errorf("error unmarshaling filter: %v", err)
-	}
+	// var filterData map[string]interface{}
+	// if err := json.Unmarshal([]byte(filter), &filterData); err != nil {
+	// 	return fmt.Errorf("error unmarshaling filter: %v", err)
+	// }
 
-	results, err := elasticService.SearchByCondition(index, filterData)
+	results, err := elasticService.SearchByCondition(index, filter)
 	if err != nil {
 		return fmt.Errorf("error searching Elasticsearch: %v", err)
 	}
@@ -77,14 +79,14 @@ func (e *Embedings) Execute(input io.Reader) error {
 	ctx := context.Background()
 
 	embedingDocument.AddDocuments(ctx, docs, runtime.NumCPU())
-
+	lastReadId := 1
+	e.lastReadId = &lastReadId
 	return nil
 } // Output implements framework.Stage.
 
 func (e *Embedings) Output() io.Reader {
-	panic("unimplemented")
+	return strings.NewReader(strconv.Itoa(*e.lastReadId))
 }
-
 func NewEmbedings() framework.Stage {
 	return &Embedings{}
 }

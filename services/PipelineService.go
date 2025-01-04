@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"sync"
+	"time"
 
 	"Nebula.Conduit/framework"
 )
@@ -22,16 +24,23 @@ func (s *PipelineService) AddPipeline(pipeline *framework.Pipeline) error {
 	*s.pipelines = append(*s.pipelines, *pipeline)
 	return nil
 }
-func (s *PipelineService) Execute(ctx ...context.Context) {
+func (s *PipelineService) Execute(ctx interface{}) {
 	pipelines := *s.pipelines
 	s.executePipelines(pipelines, ctx)
 }
 
-func (s *PipelineService) executePipelines(pipelines []framework.Pipeline, ctx []context.Context) {
+func (s *PipelineService) executePipelines(pipelines []framework.Pipeline, ctx interface{}) {
 	for _, pipeline := range pipelines {
 		if pipeline.Continues {
 			for pipeline.Continues {
-				s.executePipeline(ctx, pipeline)
+				wg := sync.WaitGroup{}
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					s.executePipeline(ctx, pipeline)
+				}()
+				wg.Wait()
+				time.Sleep(time.Millisecond * 20000)
 			}
 		} else {
 			s.executePipeline(ctx, pipeline)
@@ -39,12 +48,8 @@ func (s *PipelineService) executePipelines(pipelines []framework.Pipeline, ctx [
 	}
 }
 
-func (*PipelineService) executePipeline(ctx []context.Context, pipeline framework.Pipeline) {
+func (*PipelineService) executePipeline(ctx interface{}, pipeline framework.Pipeline) {
 	go func(p *framework.Pipeline) {
-		if len(ctx) > 0 {
-			p.Execute(ctx[0])
-		} else {
-			p.Execute(context.Background())
-		}
+		p.Execute(ctx)
 	}(&pipeline)
 }
