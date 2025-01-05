@@ -1,7 +1,9 @@
 package services
 
 import (
+	"context"
 	"strings"
+	"time"
 
 	"github.com/philippgille/chromem-go"
 
@@ -10,6 +12,7 @@ import (
 
 type EmbeddingService interface {
 	GetCollection(collectionName string) *chromem.Collection
+	SearchResults(collectionName string, query string) []string
 }
 
 type OllamaEmbeddingService struct {
@@ -24,6 +27,33 @@ func NewEmbeddingService(ollamaUrl string, model string) EmbeddingService {
 		Model:          model,
 		PersistentPath: "./db",
 	}
+}
+
+func (s *OllamaEmbeddingService) SearchResults(collectionName string, query string) []string {
+	collection := s.GetCollection(collectionName)
+	start := time.Now()
+	log.Println("Querying chromem-go...")
+	// "nomic-embed-text" specific prefix (not required with OpenAI's or other models)
+
+	docRes, err := collection.Query(context.Background(), query, 2, nil, nil)
+	if err != nil {
+		panic(err)
+	}
+	log.Println("Search (incl query embedding) took", time.Since(start))
+
+	results := make([]string, len(docRes))
+	for i, res := range docRes {
+		// Cut off the prefix we added before adding the document (see comment above).
+		// This is specific to the "nomic-embed-text" model.
+		content := strings.TrimPrefix(res.Content, "search_document: ")
+		log.Printf("Document %d (similarity: %f): \"%s\"\n", i+1, res.Similarity, content)
+		if res.Similarity < 0.7 {
+			log.Println("Similarity too low, skipping")
+			continue
+		}
+		results[i] = content
+	}
+	return results
 }
 
 // GetCollection retrieves or creates a chromem.Collection with the specified name.
