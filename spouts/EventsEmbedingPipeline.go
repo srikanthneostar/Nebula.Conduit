@@ -9,11 +9,12 @@ import (
 func CreateEmbedingsPipeline() (*framework.Pipeline, interface{}) {
 	pipeline := framework.NewPipeline()
 	pipeline.Continues = true
+	pipeline.WaitTime = 3
 
 	inputData := models.EventsInputData{
 		Index:      "nebulastore",
 		Collection: "journalevents",
-		LastReadID: 0,
+		InitReadID: 0,
 	}
 
 	// Add a CSV reader stage to the pipeline

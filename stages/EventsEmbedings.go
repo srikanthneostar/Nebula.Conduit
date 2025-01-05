@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"runtime"
 	"strconv"
 	"strings"
@@ -26,6 +27,11 @@ type Embedings struct{ lastReadId *int }
 // Elasticsearch and an embedding service, and returns any errors that occur
 // during the execution.
 func (e *Embedings) Execute(input io.Reader) error {
+	defer func() {
+		if err := recover(); err != nil {
+			log.Printf("Error occurred: %v\n", err)
+		}
+	}()
 
 	// Create Elasticsearch client
 	elasticService := services.NewElasticService([]string{"http://192.168.1.232:9200"})
@@ -33,39 +39,53 @@ func (e *Embedings) Execute(input io.Reader) error {
 	// Read input data
 	data, err := io.ReadAll(input)
 	if err != nil {
+		log.Printf("Error reading input: %v\n", err)
 		return fmt.Errorf("error reading input: %v", err)
 	}
 	// Parse input data
 	var inputData models.EventsInputData
 	if err := json.Unmarshal(data, &inputData); err != nil {
+		log.Printf("Error unmarshaling data: %v\n", err)
 		return fmt.Errorf("error unmarshaling data: %v", err)
 	}
 
 	index := inputData.Index
-	filter := utilities.GetEventsFilterCondition(inputData.LastReadID)
-	// var filterData map[string]interface{}
-	// if err := json.Unmarshal([]byte(filter), &filterData); err != nil {
-	// 	return fmt.Errorf("error unmarshaling filter: %v", err)
-	// }
+	var lastReadID int
+	if e.lastReadId != nil && *e.lastReadId != 0 {
+		lastReadID = *e.lastReadId
+	} else {
+		lastReadID = inputData.InitReadID
+	}
+
+	filter := utilities.GetEventsFilterCondition(lastReadID)
+
 
 	// Instead of passing the whole filter
 	results, err := elasticService.SearchByCondition(index, filter)
+	if len(results) == 0 {
+		log.Println("No records found")
+		return nil
+	}
 
 	if err != nil {
+		log.Printf("Error searching Elasticsearch: %v\n", err)
+
 		return fmt.Errorf("error searching Elasticsearch: %v", err)
 	}
-	fmt.Println("printing res -->", results)
+	log.Println("printing res -->", results)
 
 	embedingService := services.NewEmbeddingService("http://192.168.1.10:11434", "phi3")
 	embedingCollection := inputData.Collection
 	embedingDocument := embedingService.GetCollection(embedingCollection)
 
 	var docs []chromem.Document
+	var ids []float64
 
 	for _, result := range results {
-		fmt.Println(result)
+		log.Println(result)
 		d, err := json.Marshal(result)
 		if err != nil {
+			log.Printf("Error marshaling result: %v\n", err)
 			return fmt.Errorf("error marshaling result: %v", err)
 		}
 		metadata := make(map[string]string)
@@ -73,25 +93,48 @@ func (e *Embedings) Execute(input io.Reader) error {
 			metadata[k] = fmt.Sprintf("%v", v)
 		}
 
-		docs = append(docs, chromem.Document{
-			ID:       result["id"].(string),
-			Metadata: metadata,
-			Content:  string(d),
-		})
-
+		if entity, ok := result["entity"].(map[string]interface{}); ok {
+			if id, ok := entity["id"].(float64); ok {
+				ids = append(ids, id)
+				docs = append(docs, chromem.Document{
+					ID:       strconv.Itoa(int(id)),
+					Metadata: metadata,
+					Content:  string(d),
+				})
+			} else {
+				log.Printf("Error: entity.id is not an int32\n")
+			}
+		} else {
+			log.Printf("Error: result does not contain an entity map\n")
+		}
 	}
 
 	ctx := context.Background()
 
-	embedingDocument.AddDocuments(ctx, docs, runtime.NumCPU())
-	lastReadId := 1
+	err = embedingDocument.AddDocuments(ctx, docs, runtime.NumCPU())
+	if err != nil {
+		return err
+	}
+
+	maxId := 0.0
+	for _, id := range ids {
+		if id > maxId {
+			maxId = id
+		}
+	}
+
+	log.Println("maxId -->", maxId)
+	lastReadId := int(maxId)
 	e.lastReadId = &lastReadId
 	return nil
-} // Output implements framework.Stage.
+}
+
+// Output implements framework.Stage.Output.
 
 func (e *Embedings) Output() io.Reader {
 	return strings.NewReader(strconv.Itoa(*e.lastReadId))
 }
 func NewEmbedings() framework.Stage {
-	return &Embedings{}
+	lastReadId := 0
+	return &Embedings{lastReadId: &lastReadId}
 }

@@ -40,14 +40,14 @@ func (s *PipelineService) executePipelines(pipelines []framework.Pipeline, ctx i
 					s.executePipeline(ctx, pipeline)
 				}()
 				wg.Wait()
-				time.Sleep(time.Millisecond * 20000)
+				time.Sleep(time.Duration(pipeline.WaitTime) * time.Minute)
 			}
 		} else {
 			s.executePipeline(ctx, pipeline)
 		}
 	}
-}
 
+}
 func (*PipelineService) executePipeline(ctx interface{}, pipeline framework.Pipeline) {
 	go func(p *framework.Pipeline) {
 		p.Execute(ctx)

@@ -9,6 +9,7 @@ import (
 type Pipeline struct {
 	stages    []Stage
 	Continues bool
+	WaitTime  int
 }
 
 // NewPipeline returns a new pipeline
