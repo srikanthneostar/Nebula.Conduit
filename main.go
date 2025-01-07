@@ -17,7 +17,7 @@ func main() {
 	// Start web API server in a goroutine
 	go func() {
 		// Create embedding service for the web API
-		embeddingService := services.NewEmbeddingService("http://192.168.1.10:11434", "phi3")
+		embeddingService := services.NewEmbeddingService("http://0.0.0.0:11434", "mistral-max")
 
 		// Initialize web API with embedding service
 		webAPI := api.NewWebAPI(embeddingService)

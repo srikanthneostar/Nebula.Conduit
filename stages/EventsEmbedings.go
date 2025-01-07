@@ -59,7 +59,6 @@ func (e *Embedings) Execute(input io.Reader) error {
 
 	filter := utilities.GetEventsFilterCondition(lastReadID)
 
-
 	// Instead of passing the whole filter
 	results, err := elasticService.SearchByCondition(index, filter)
 	if len(results) == 0 {
@@ -74,7 +73,7 @@ func (e *Embedings) Execute(input io.Reader) error {
 	}
 	log.Println("printing res -->", results)
 
-	embedingService := services.NewEmbeddingService("http://192.168.1.10:11434", "phi3")
+	embedingService := services.NewEmbeddingService("http://0.0.0.0:11434", "mistral-max")
 	embedingCollection := inputData.Collection
 	embedingDocument := embedingService.GetCollection(embedingCollection)
 
@@ -83,19 +82,38 @@ func (e *Embedings) Execute(input io.Reader) error {
 
 	for _, result := range results {
 		log.Println(result)
-		d, err := json.Marshal(result)
+		d, err := json.Marshal(result["entity"])
 		if err != nil {
 			log.Printf("Error marshaling result: %v\n", err)
 			return fmt.Errorf("error marshaling result: %v", err)
 		}
 		metadata := make(map[string]string)
-		for k, v := range result {
-			metadata[k] = fmt.Sprintf("%v", v)
+		for k, v := range result["entity"].(map[string]interface{}) {
+			switch val := v.(type) {
+			case string:
+				metadata[k] = val
+			case float64:
+				metadata[k] = strconv.FormatFloat(val, 'f', -1, 64)
+			case int:
+				metadata[k] = strconv.Itoa(val)
+			case bool:
+				metadata[k] = strconv.FormatBool(val)
+			case map[string]interface{}:
+				if jsonBytes, err := json.Marshal(val); err == nil {
+					metadata[k] = string(jsonBytes)
+				}
+			default:
+				metadata[k] = fmt.Sprintf("%v", v)
+			}
 		}
+
+		val, _ := json.Marshal(metadata)
+		log.Println("meta----->", string(val))
 
 		if entity, ok := result["entity"].(map[string]interface{}); ok {
 			if id, ok := entity["id"].(float64); ok {
 				ids = append(ids, id)
+				log.Println("content----->", string(d))
 				docs = append(docs, chromem.Document{
 					ID:       strconv.Itoa(int(id)),
 					Metadata: metadata,
