@@ -82,28 +82,33 @@ func (e *Embedings) Execute(input io.Reader) error {
 
 	for _, result := range results {
 		log.Println(result)
-		d, err := json.Marshal(result["entity"])
-		if err != nil {
-			log.Printf("Error marshaling result: %v\n", err)
-			return fmt.Errorf("error marshaling result: %v", err)
-		}
+
 		metadata := make(map[string]string)
-		for k, v := range result["entity"].(map[string]interface{}) {
-			switch val := v.(type) {
-			case string:
-				metadata[k] = val
-			case float64:
-				metadata[k] = strconv.FormatFloat(val, 'f', -1, 64)
-			case int:
-				metadata[k] = strconv.Itoa(val)
-			case bool:
-				metadata[k] = strconv.FormatBool(val)
-			case map[string]interface{}:
-				if jsonBytes, err := json.Marshal(val); err == nil {
-					metadata[k] = string(jsonBytes)
+
+		if entity, ok := result["entity"].(map[string]interface{}); ok {
+			for k, v := range entity {
+				if v == nil {
+					continue
 				}
-			default:
-				metadata[k] = fmt.Sprintf("%v", v)
+				if str, ok := v.(string); ok && str == "" {
+					continue
+				}
+				switch val := v.(type) {
+				case string:
+					metadata[k] = val
+				case float64:
+					metadata[k] = strconv.FormatFloat(val, 'f', -1, 64)
+				case int:
+					metadata[k] = strconv.Itoa(val)
+				case bool:
+					metadata[k] = strconv.FormatBool(val)
+				case map[string]interface{}:
+					if jsonBytes, err := json.Marshal(val); err == nil {
+						metadata[k] = string(jsonBytes)
+					}
+				default:
+					metadata[k] = fmt.Sprintf("%v", v)
+				}
 			}
 		}
 
@@ -113,17 +118,19 @@ func (e *Embedings) Execute(input io.Reader) error {
 		if entity, ok := result["entity"].(map[string]interface{}); ok {
 			if id, ok := entity["id"].(float64); ok {
 				ids = append(ids, id)
-				log.Println("content----->", string(d))
+				content, _ := json.Marshal(entity)
+				log.Println("content----->", string(content))
+
 				docs = append(docs, chromem.Document{
 					ID:       strconv.Itoa(int(id)),
 					Metadata: metadata,
-					Content:  string(d),
+					Content:  "search_document: " + string(content),
 				})
 			} else {
-				log.Printf("Error: entity.id is not an int32\n")
+				log.Printf("Error: entity.id is not a float64\n")
 			}
 		} else {
-			log.Printf("Error: result does not contain an entity map\n")
+			log.Printf("Error: result[\"entity\"] is not a map[string]interface{}\n")
 		}
 	}
 
@@ -146,8 +153,6 @@ func (e *Embedings) Execute(input io.Reader) error {
 	e.lastReadId = &lastReadId
 	return nil
 }
-
-// Output implements framework.Stage.Output.
 
 func (e *Embedings) Output() io.Reader {
 	return strings.NewReader(strconv.Itoa(*e.lastReadId))

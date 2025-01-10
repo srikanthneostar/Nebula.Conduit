@@ -30,12 +30,13 @@ func NewEmbeddingService(ollamaUrl string, model string) EmbeddingService {
 }
 
 func (s *OllamaEmbeddingService) SearchResults(collectionName string, query string) []string {
+	question := "search_query: " + query
 	collection := s.GetCollection(collectionName)
 	start := time.Now()
 	log.Println("Querying chromem-go...")
 	// "nomic-embed-text" specific prefix (not required with OpenAI's or other models)
 
-	docRes, err := collection.Query(context.Background(), query, 2, nil, nil)
+	docRes, err := collection.Query(context.Background(), question, 2, nil, nil)
 	if err != nil {
 		panic(err)
 	}
