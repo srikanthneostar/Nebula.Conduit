@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -44,17 +45,21 @@ func (s *OllamaEmbeddingService) SearchResults(collectionName string, query stri
 
 	results := make([]string, len(docRes))
 	for i, res := range docRes {
-		// Cut off the prefix we added before adding the document (see comment above).
-		// This is specific to the "nomic-embed-text" model.
-		content := strings.TrimPrefix(res.Content, "search_document: ")
-		log.Printf("Document %d (similarity: %f): \"%s\"\n", i+1, res.Similarity, content)
+		// Convert metadata to JSON string
+		content, err := json.Marshal(res.Metadata)
+		if err != nil {
+			log.Printf("Error marshaling metadata: %v", err)
+			continue
+		}
+		log.Printf("Document %d (similarity: %f): \"%s\"\n", i+1, res.Similarity, string(content))
 		if res.Similarity < 0.7 {
 			log.Println("Similarity too low, skipping")
 			continue
 		}
-		results[i] = content
+		results[i] = string(content)
 	}
 	return results
+
 }
 
 // GetCollection retrieves or creates a chromem.Collection with the specified name.

@@ -118,13 +118,13 @@ func (e *Embedings) Execute(input io.Reader) error {
 		if entity, ok := result["entity"].(map[string]interface{}); ok {
 			if id, ok := entity["id"].(float64); ok {
 				ids = append(ids, id)
-				content, _ := json.Marshal(entity)
-				log.Println("content----->", string(content))
+				content := convertEntityToString(entity)
+				log.Println("content----->", content)
 
 				docs = append(docs, chromem.Document{
 					ID:       strconv.Itoa(int(id)),
 					Metadata: metadata,
-					Content:  "search_document: " + string(content),
+					Content:  "search_document: " + content,
 				})
 			} else {
 				log.Printf("Error: entity.id is not a float64\n")
@@ -154,6 +154,22 @@ func (e *Embedings) Execute(input io.Reader) error {
 	return nil
 }
 
+func convertEntityToString(entity map[string]interface{}) string {
+	var result strings.Builder
+	result.WriteString("This is a system generated event with following attributes :\n")
+	for key, value := range entity {
+		if value == nil {
+			continue
+		}
+		if str, ok := value.(string); ok && strings.TrimSpace(str) == "" {
+			continue
+		}
+		result.WriteString(fmt.Sprintf("%s: %v\n", key, value))
+	}
+	result.WriteString(". Each attribute defined above corrosponds to a data property \n")
+
+	return result.String()
+}
 func (e *Embedings) Output() io.Reader {
 	return strings.NewReader(strconv.Itoa(*e.lastReadId))
 }
