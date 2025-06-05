@@ -3,7 +3,6 @@ package database
 import (
 	"database/sql"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,6 +13,15 @@ import (
 
 // InitDB initializes the database and applies any pending migrations
 func InitDB(path string) (*sql.DB, error) {
+	// If path is not absolute, make it relative to NEBULA_CONDUIT_HOME
+	if !filepath.IsAbs(path) {
+		basePath := os.Getenv("NEBULA_CONDUIT_HOME")
+		if basePath == "" {
+			return nil, fmt.Errorf("environment variable NEBULA_CONDUIT_HOME is not set")
+		}
+		path = filepath.Join(basePath, path)
+	}
+
 	// Ensure the database directory exists
 	dbDir := filepath.Dir(path)
 	if err := os.MkdirAll(dbDir, 0755); err != nil {
@@ -41,8 +49,17 @@ func InitDB(path string) (*sql.DB, error) {
 
 // applyMigrations applies all pending migrations in order
 func applyMigrations(db *sql.DB) error {
+	// Get the base directory from environment variable
+	basePath := os.Getenv("NEBULA_CONDUIT_HOME")
+	if basePath == "" {
+		return fmt.Errorf("environment variable NEBULA_CONDUIT_HOME is not set")
+	}
+
+	// Build migrations directory path
+	migrationsDir := filepath.Join(basePath, "migrations")
+
 	// Read migration files
-	files, err := ioutil.ReadDir("/Users/srikanthjonnalagedda/Nebula.Conduit/migrations/")
+	files, err := os.ReadDir(migrationsDir)
 	if err != nil {
 		return fmt.Errorf("failed to read migrations directory: %w", err)
 	}
@@ -87,8 +104,9 @@ func applyMigrations(db *sql.DB) error {
 			continue
 		}
 
-		// Read and execute migration
-		content, err := ioutil.ReadFile(filepath.Join("/Users/srikanthjonnalagedda/Nebula.Conduit/migrations/", migration))
+		// Read and execute migration file
+		migrationPath := filepath.Join(migrationsDir, migration)
+		content, err := os.ReadFile(migrationPath)
 		if err != nil {
 			return fmt.Errorf("failed to read migration file %s: %w", migration, err)
 		}
