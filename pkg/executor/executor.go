@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-"github.com/google/uuid"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
 	"github.com/Xecutables/Nebula.Conduit/config"
@@ -210,21 +210,21 @@ func (e *PythonExecutor) updateTaskSuccess(taskID string, output []byte) error {
 	return e.taskRepo.UpdateTask(task)
 }
 
-func (e *PythonExecutor) updateTaskFailure(taskID string, err error, output ...[]byte) error {
+func (e *PythonExecutor) updateTaskFailure(taskID string, execErr error, output ...[]byte) error {
 	task, err := e.taskRepo.GetTask(taskID)
 	if err != nil {
 		return err
 	}
 
 	task.Status = models.StatusFailed
-	task.Error = err.Error()
+	task.Error = execErr.Error()
 	task.EndedAt = time.Now()
 
 	if len(output) > 0 {
 		task.Output = string(output[0])
 	}
 
-	if exitErr, ok := err.(*exec.ExitError); ok {
+	if exitErr, ok := execErr.(*exec.ExitError); ok {
 		task.ExitCode = exitErr.ExitCode()
 	} else {
 		task.ExitCode = -1
