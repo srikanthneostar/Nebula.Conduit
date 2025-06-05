@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/Xecutables/Nebula.Conduit/config"
 	"github.com/Xecutables/Nebula.Conduit/internal/api"
@@ -11,8 +13,16 @@ import (
 )
 
 func main() {
+	envValue := os.Getenv("NEBULA_CONDUIT_HOME")
+
+	if envValue == "" {
+		fmt.Println("Environment variable NEBULA_CONDUIT_HOME is not set.")
+	}
+
+	configPath := filepath.Join(envValue, "config.yaml")
+
 	// Load configuration
-	cfg, err := config.LoadConfig("/Users/srikanthjonnalagedda/Nebula.Conduit/config/config.yaml")
+	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
