@@ -41,7 +41,7 @@ func testExecutor() {
 	pythonExecutor := executor.NewPythonExecutor(taskRepo, pathCfg, timeout)
 
 	// Prepare input
-	taskID := "test-task-id"
+	// taskID := "test-task-id"
 	scriptName := "forecasting.py"
 	args := []string{"--queryid", "4"}
 	env := []string{}
@@ -49,15 +49,21 @@ func testExecutor() {
 
 	// Call RunTask
 	ctx := context.Background()
-	pythonExecutor.RunTask(ctx, taskID, scriptName, args, env, userID)
+	task, _ := pythonExecutor.ExecuteWithTimeout(ctx, scriptName, args, env, userID)
 
-	// Fetch and print task info
-	task, err := taskRepo.GetTask(taskID)
-	if err != nil {
-		log.Fatalf("Failed to get task: %v", err)
+	if task == nil {
+		log.Fatal("Task execution failed, task is nil")
 	}
 
-	log.Printf("Task finished: %+v\n", task)
+	pythonExecutor.RunTask(ctx, task.ID, scriptName, args, env, userID)
+
+	// Fetch and print task info
+	// task, err := taskRepo.GetTask(taskID)
+	// if err != nil {
+	// 	log.Fatalf("Failed to get task: %v", err)
+	// }
+
+	// log.Printf("Task finished: %+v\n", task)
 }
 
 func main() {
