@@ -69,10 +69,10 @@ func (e *PythonExecutor) prepareCommand(scriptPath string, args []string) (*exec
 
 	cmd := exec.Command(scriptPath, args...)
 	cmd.Dir = filepath.Dir(scriptPath)
-	cmd.Env = []string{
-		"PATH=/usr/local/bin:/usr/bin:/bin",
-		"HOME=" + os.Getenv("HOME"),
-	}
+	// cmd.Env = []string{
+	// 	"PATH=/usr/local/bin:/usr/bin:/bin",
+	// 	"HOME=" + os.Getenv("HOME"),
+	// }
 
 	return cmd, nil
 }
