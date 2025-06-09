@@ -26,11 +26,12 @@ var (
 )
 
 type PythonExecutor struct {
-	taskRepo     repository.TaskRepository
-	runningTasks sync.Map
-	pathConfig   *config.PathConfig
-	timeout      time.Duration
-	validator    security.ScriptValidator
+	taskRepo       repository.TaskRepository
+	runningTasks   sync.Map
+	pathConfig     *config.PathConfig
+	timeout        time.Duration
+	validator      security.ScriptValidator
+	pythonCommand  string // Add this field
 }
 
 func NewPythonExecutor(repo repository.TaskRepository, cfg *config.PathConfig, timeout time.Duration) *PythonExecutor {
@@ -39,11 +40,20 @@ func NewPythonExecutor(repo repository.TaskRepository, cfg *config.PathConfig, t
 		log.Fatal().Err(err).Msg("Failed to create Python scripts directory")
 	}
 
+	// Determine Python command based on platform or configuration
+	pythonCmd := "python"
+	if _, err := exec.LookPath("py"); err == nil {
+		pythonCmd = "py"
+	} else if _, err := exec.LookPath("python3"); err == nil {
+		pythonCmd = "python3"
+	}
+
 	return &PythonExecutor{
-		taskRepo:   repo,
-		pathConfig: cfg,
-		timeout:    timeout,
-		validator:  security.NewScriptValidator(),
+		taskRepo:      repo,
+		pathConfig:    cfg,
+		timeout:       timeout,
+		validator:     security.NewScriptValidator(),
+		pythonCommand: pythonCmd,
 	}
 }
 
@@ -67,13 +77,11 @@ func (e *PythonExecutor) prepareCommand(scriptPath string, args []string) (*exec
 		return nil, fmt.Errorf("failed to set executable permissions: %w", err)
 	}
 
-	cmd := exec.Command(scriptPath, args...)
+	// Use configured Python command to run the script
+	cmdArgs := append([]string{scriptPath}, args...)
+	cmd := exec.Command(e.pythonCommand, cmdArgs...)
 	cmd.Dir = filepath.Dir(scriptPath)
-	// cmd.Env = []string{
-	// 	"PATH=/usr/local/bin:/usr/bin:/bin",
-	// 	"HOME=" + os.Getenv("HOME"),
-	// }
-
+	
 	return cmd, nil
 }
 
