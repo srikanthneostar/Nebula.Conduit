@@ -35,11 +35,14 @@ func NewTaskService(repo Repository, executor *executor.PythonExecutor, validato
 }
 
 func (s *taskService) CreateTask(script string, args []string, env []string, userID int) (*models.Task, error) {
+	// Validate script before proceeding
 	if err := s.validator.Validate(script, args); err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
 
+	// Generate Task ID
 	taskID := uuid.New().String()
+
 	task := &models.Task{
 		ID:        taskID,
 		Script:    script,
@@ -50,8 +53,13 @@ func (s *taskService) CreateTask(script string, args []string, env []string, use
 		StartedAt: time.Now(),
 	}
 
-	// Run in background
-	go s.executor.ExecuteWithTimeout(context.Background(), script, args, env, userID)
+	// Insert task into DB first (fully persistent before starting executor)
+	if err := s.repo.CreateTask(task); err != nil {
+		return nil, err
+	}
+
+	// Run task asynchronously
+	go s.executor.RunTask(context.Background(), taskID, script, args, env, userID)
 
 	return task, nil
 }
