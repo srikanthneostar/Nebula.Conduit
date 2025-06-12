@@ -26,12 +26,12 @@ var (
 )
 
 type PythonExecutor struct {
-	taskRepo       repository.TaskRepository
-	runningTasks   sync.Map
-	pathConfig     *config.PathConfig
-	timeout        time.Duration
-	validator      security.ScriptValidator
-	pythonCommand  string // Add this field
+	taskRepo      repository.TaskRepository
+	runningTasks  sync.Map
+	pathConfig    *config.PathConfig
+	timeout       time.Duration
+	validator     security.ScriptValidator
+	pythonCommand string // Add this field
 }
 
 func NewPythonExecutor(repo repository.TaskRepository, cfg *config.PathConfig, timeout time.Duration) *PythonExecutor {
@@ -81,7 +81,7 @@ func (e *PythonExecutor) prepareCommand(scriptPath string, args []string) (*exec
 	cmdArgs := append([]string{scriptPath}, args...)
 	cmd := exec.Command(e.pythonCommand, cmdArgs...)
 	cmd.Dir = filepath.Dir(scriptPath)
-	
+
 	return cmd, nil
 }
 
@@ -104,7 +104,8 @@ func (e *PythonExecutor) ExecuteWithTimeout(ctx context.Context, scriptName stri
 	}
 
 	if err := e.taskRepo.CreateTask(task); err != nil {
-		return nil, fmt.Errorf("failed to create task: %w", err)
+		log.Error().Err(err).Msg("Failed to create task")
+		return nil, err
 	}
 
 	// Run in background with timeout
@@ -125,6 +126,7 @@ func (e *PythonExecutor) RunTask(ctx context.Context, taskID, scriptName string,
 	}
 
 	cmd, err := e.prepareCommand(scriptPath, args)
+	log.Info().Str("task_id", taskID).Str("script_path", scriptPath).Msg("Preparing command for task")
 	if err != nil {
 		e.updateTaskFailure(taskID, err)
 		return
@@ -145,7 +147,21 @@ func (e *PythonExecutor) RunTask(ctx context.Context, taskID, scriptName string,
 	}
 
 	// Execute and capture output
+	log.Info().Str("task_id", taskID).Msg("Executing task")
 	output, err := cmd.CombinedOutput()
+	// log.Info().Str("task_id", taskID).Msgf("Task output: %s", output)
+	// log.Error().Str("task_id", taskID).Err(err).Msg("Task execution error")
+
+	// Update task status
+	if err != nil {
+		e.updateTaskFailure(taskID, err, output)
+		log.Error().Str("task_id", taskID).Err(err).Msg(fmt.Sprintf("Task execution failed : %s", output))
+	} else {
+		e.updateTaskSuccess(taskID, output)
+		log.Info().Str("task_id", taskID).Msg("Task completed successfully")
+	}
+
+	// Remove from running tasks
 	e.runningTasks.Delete(taskID)
 
 	// Handle context cancellation
@@ -156,12 +172,6 @@ func (e *PythonExecutor) RunTask(ctx context.Context, taskID, scriptName string,
 	default:
 	}
 
-	// Update task status
-	if err != nil {
-		e.updateTaskFailure(taskID, err, output)
-	} else {
-		e.updateTaskSuccess(taskID, output)
-	}
 }
 
 func (e *PythonExecutor) StopTask(taskID string) error {
