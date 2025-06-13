@@ -14,3 +14,6 @@ paths:
   allowed_paths:
     # - "/opt/pyexec/scripts"
     - "C:/nebula.rivulet/fabric/build/lib/algorithms"
+
+setlog:
+  loglevel : "info"

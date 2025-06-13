@@ -8,7 +8,12 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Xecutables/Nebula.Conduit/pkg/logger"
 	_ "github.com/mattn/go-sqlite3"
+)
+
+var (
+	log = logger.InitLogger()
 )
 
 // InitDB initializes the database and applies any pending migrations
@@ -25,23 +30,27 @@ func InitDB(path string) (*sql.DB, error) {
 	// Ensure the database directory exists
 	dbDir := filepath.Dir(path)
 	if err := os.MkdirAll(dbDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create database directory: %w", err)
+		log.Error().Err(err).Str("path", dbDir).Msg("Failed to create database directory")
+		return nil, err
 	}
 
 	// Open database (this will create the file if it doesn't exist)
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		log.Error().Err(err).Str("path", path).Msg("Failed to open database")
+		return nil, err
 	}
 
 	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("failed to ping database: %w", err)
+		log.Error().Err(err).Str("path", path).Msg("Failed to ping database")
+		return nil, err
 	}
 
 	// Apply migrations
 	if err := applyMigrations(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("failed to apply migrations: %w", err)
+		log.Error().Err(err).Str("path", path).Msg("Failed to apply migrations")
+		return nil, err
 	}
 
 	return db, nil
@@ -61,7 +70,8 @@ func applyMigrations(db *sql.DB) error {
 	// Read migration files
 	files, err := os.ReadDir(migrationsDir)
 	if err != nil {
-		return fmt.Errorf("failed to read migrations directory: %w", err)
+		log.Error().Err(err).Str("migrations_dir", migrationsDir).Msg("Failed to read migrations directory")
+		return err
 	}
 
 	// Sort migration files by name
@@ -76,7 +86,8 @@ func applyMigrations(db *sql.DB) error {
 	// Begin transaction
 	tx, err := db.Begin()
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		log.Error().Err(err).Msg("Failed to begin transaction for migrations")
+		return err
 	}
 	defer tx.Rollback()
 
@@ -89,7 +100,8 @@ func applyMigrations(db *sql.DB) error {
 		)
 	`)
 	if err != nil {
-		return fmt.Errorf("failed to create migrations table: %w", err)
+		log.Error().Err(err).Msg("Failed to create migrations table")
+		return err
 	}
 
 	// Apply each migration
@@ -98,7 +110,8 @@ func applyMigrations(db *sql.DB) error {
 		var count int
 		err := tx.QueryRow("SELECT COUNT(*) FROM migrations WHERE name = ?", migration).Scan(&count)
 		if err != nil {
-			return fmt.Errorf("failed to check migration status: %w", err)
+			log.Error().Err(err).Str("migration", migration).Msg("Failed to check migration status")
+			return err
 		}
 		if count > 0 {
 			continue
@@ -108,24 +121,28 @@ func applyMigrations(db *sql.DB) error {
 		migrationPath := filepath.Join(migrationsDir, migration)
 		content, err := os.ReadFile(migrationPath)
 		if err != nil {
-			return fmt.Errorf("failed to read migration file %s: %w", migration, err)
+			log.Error().Err(err).Str("migration", migration).Msg("Failed to read migration file")
+			return err
 		}
 
 		_, err = tx.Exec(string(content))
 		if err != nil {
-			return fmt.Errorf("failed to apply migration %s: %w", migration, err)
+			log.Error().Err(err).Str("migration", migration).Msg("Failed to apply migration")
+			return err
 		}
 
 		// Record migration
 		_, err = tx.Exec("INSERT INTO migrations (name) VALUES (?)", migration)
 		if err != nil {
-			return fmt.Errorf("failed to record migration %s: %w", migration, err)
+			log.Error().Err(err).Str("migration", migration).Msg("Failed to record migration")
+			return err
 		}
 	}
 
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit migrations: %w", err)
+		log.Error().Err(err).Msg("Failed to commit migrations transaction")
+		return err
 	}
 
 	return nil
