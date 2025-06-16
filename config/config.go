@@ -25,6 +25,10 @@ type Config struct {
 		PythonScriptsHome string   `mapstructure:"PYTHON_SCRIPTS_HOME"`
 		AllowedPaths      []string `mapstructure:"ALLOWED_PATHS"`
 	} `mapstructure:"paths"`
+
+	Log struct {
+		Level string `mapstructure:"LOGLEVEL"`
+	} `mapstructure:"setlog"`
 }
 
 func LoadConfig(path string) (*Config, error) {

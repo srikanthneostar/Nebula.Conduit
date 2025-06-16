@@ -12,11 +12,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/rs/zerolog/log"
+	"github.com/rs/zerolog"
 
 	"github.com/Xecutables/Nebula.Conduit/config"
 	"github.com/Xecutables/Nebula.Conduit/internal/models"
 	"github.com/Xecutables/Nebula.Conduit/internal/repository"
+	"github.com/Xecutables/Nebula.Conduit/pkg/logger"
 	"github.com/Xecutables/Nebula.Conduit/pkg/security"
 )
 
@@ -32,12 +33,14 @@ type PythonExecutor struct {
 	timeout       time.Duration
 	validator     security.ScriptValidator
 	pythonCommand string // Add this field
+	logger        zerolog.Logger
 }
 
 func NewPythonExecutor(repo repository.TaskRepository, cfg *config.PathConfig, timeout time.Duration) *PythonExecutor {
 	// Ensure the scripts directory exists
 	if err := os.MkdirAll(cfg.PythonScriptsHome, 0755); err != nil {
-		log.Fatal().Err(err).Msg("Failed to create Python scripts directory")
+		logger := logger.InitLogger()
+		logger.Fatal().Err(err).Msg("Failed to create Python scripts directory")
 	}
 
 	// Determine Python command based on platform or configuration
@@ -47,6 +50,7 @@ func NewPythonExecutor(repo repository.TaskRepository, cfg *config.PathConfig, t
 	} else if _, err := exec.LookPath("python3"); err == nil {
 		pythonCmd = "python3"
 	}
+	appLogger := logger.InitLogger()
 
 	return &PythonExecutor{
 		taskRepo:      repo,
@@ -54,12 +58,14 @@ func NewPythonExecutor(repo repository.TaskRepository, cfg *config.PathConfig, t
 		timeout:       timeout,
 		validator:     security.NewScriptValidator(),
 		pythonCommand: pythonCmd,
+		logger:        appLogger,
 	}
 }
 
 func (e *PythonExecutor) validateScriptPath(scriptName string) (string, error) {
 	if err := e.validator.Validate(scriptName, nil); err != nil {
-		return "", fmt.Errorf("invalid script name: %w", err)
+		e.logger.Error().Err(err).Str("script_name", scriptName).Msg("Script validation failed")
+		return "", err
 	}
 
 	for _, basePath := range e.pathConfig.AllowedPaths {
@@ -69,12 +75,13 @@ func (e *PythonExecutor) validateScriptPath(scriptName string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("script '%s' not found in allowed paths", scriptName)
+	return "", fmt.Errorf("script %s not found in allowed paths", scriptName)
 }
 
 func (e *PythonExecutor) prepareCommand(scriptPath string, args []string) (*exec.Cmd, error) {
 	if err := os.Chmod(scriptPath, 0755); err != nil {
-		return nil, fmt.Errorf("failed to set executable permissions: %w", err)
+		e.logger.Error().Err(err).Str("script_path", scriptPath).Msg("Failed to set executable permissions for script")
+		return nil, err
 	}
 
 	// Use configured Python command to run the script
@@ -88,6 +95,7 @@ func (e *PythonExecutor) prepareCommand(scriptPath string, args []string) (*exec
 func (e *PythonExecutor) ExecuteWithTimeout(ctx context.Context, scriptName string, args []string, env []string, userID int) (*models.Task, error) {
 	scriptPath, err := e.validateScriptPath(scriptName)
 	if err != nil {
+		e.logger.Error().Err(err).Str("script_name", scriptName).Msg("Script validation failed")
 		return nil, err
 	}
 
@@ -104,7 +112,7 @@ func (e *PythonExecutor) ExecuteWithTimeout(ctx context.Context, scriptName stri
 	}
 
 	if err := e.taskRepo.CreateTask(task); err != nil {
-		log.Error().Err(err).Msg("Failed to create task")
+		e.logger.Error().Err(err).Msg("Failed to create task")
 		return nil, err
 	}
 
@@ -121,12 +129,12 @@ func (e *PythonExecutor) ExecuteWithTimeout(ctx context.Context, scriptName stri
 func (e *PythonExecutor) RunTask(ctx context.Context, taskID, scriptName string, args []string, env []string, userID int) {
 	scriptPath, err := e.validateScriptPath(scriptName)
 	if err != nil {
-		log.Error().Err(err).Str("task_id", taskID).Msg("Script validation failed")
+		e.logger.Error().Err(err).Str("task_id", taskID).Msg("Script validation failed")
 		return
 	}
 
 	cmd, err := e.prepareCommand(scriptPath, args)
-	log.Info().Str("task_id", taskID).Str("script_path", scriptPath).Msg("Preparing command for task")
+	e.logger.Info().Str("task_id", taskID).Str("script_path", scriptPath).Msg("Preparing command for task")
 	if err != nil {
 		e.updateTaskFailure(taskID, err)
 		return
@@ -142,23 +150,21 @@ func (e *PythonExecutor) RunTask(ctx context.Context, taskID, scriptName string,
 
 	// Update status to running
 	if err := e.updateTaskStatus(taskID, models.StatusRunning); err != nil {
-		log.Error().Err(err).Str("task_id", taskID).Msg("Failed to update task status")
+		e.logger.Error().Err(err).Str("task_id", taskID).Msg("Failed to update task status")
 		return
 	}
 
 	// Execute and capture output
-	log.Info().Str("task_id", taskID).Msg("Executing task")
+	e.logger.Info().Str("task_id", taskID).Msg("Executing task")
 	output, err := cmd.CombinedOutput()
-	// log.Info().Str("task_id", taskID).Msgf("Task output: %s", output)
-	// log.Error().Str("task_id", taskID).Err(err).Msg("Task execution error")
 
 	// Update task status
 	if err != nil {
 		e.updateTaskFailure(taskID, err, output)
-		log.Error().Str("task_id", taskID).Err(err).Msg(fmt.Sprintf("Task execution failed : %s", output))
+		e.logger.Error().Str("task_id", taskID).Err(err).Msg(fmt.Sprintf("Task execution failed : %s", output))
 	} else {
 		e.updateTaskSuccess(taskID, output)
-		log.Info().Str("task_id", taskID).Msg("Task completed successfully")
+		e.logger.Info().Str("task_id", taskID).Msg("Task completed successfully")
 	}
 
 	// Remove from running tasks
@@ -187,7 +193,7 @@ func (e *PythonExecutor) StopTask(taskID string) error {
 
 	// Send SIGTERM first for graceful shutdown
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		log.Warn().Str("task_id", taskID).Err(err).Msg("Failed to send SIGTERM, trying SIGKILL")
+		e.logger.Warn().Str("task_id", taskID).Err(err).Msg("Failed to send SIGTERM, trying SIGKILL")
 		if err := cmd.Process.Kill(); err != nil {
 			return err
 		}
@@ -207,6 +213,7 @@ func (e *PythonExecutor) StopTask(taskID string) error {
 func (e *PythonExecutor) updateTaskStatus(taskID string, status models.TaskStatus) error {
 	task, err := e.taskRepo.GetTask(taskID)
 	if err != nil {
+		e.logger.Error().Err(err).Str("task_id", taskID).Msg("Failed to get task for status update")
 		return err
 	}
 
@@ -217,6 +224,7 @@ func (e *PythonExecutor) updateTaskStatus(taskID string, status models.TaskStatu
 func (e *PythonExecutor) updateTaskSuccess(taskID string, output []byte) error {
 	task, err := e.taskRepo.GetTask(taskID)
 	if err != nil {
+		e.logger.Error().Err(err).Str("task_id", taskID).Msg("Failed to get task for success update")
 		return err
 	}
 
@@ -231,6 +239,7 @@ func (e *PythonExecutor) updateTaskSuccess(taskID string, output []byte) error {
 func (e *PythonExecutor) updateTaskFailure(taskID string, execErr error, output ...[]byte) error {
 	task, err := e.taskRepo.GetTask(taskID)
 	if err != nil {
+		e.logger.Error().Err(err).Str("task_id", taskID).Msg("Failed to get task for failure update")
 		return err
 	}
 
@@ -254,6 +263,7 @@ func (e *PythonExecutor) updateTaskFailure(taskID string, execErr error, output 
 func (e *PythonExecutor) updateTaskCancelled(taskID string, reason error) error {
 	task, err := e.taskRepo.GetTask(taskID)
 	if err != nil {
+		e.logger.Error().Err(err).Str("task_id", taskID).Msg("Failed to get task for cancellation update")
 		return err
 	}
 

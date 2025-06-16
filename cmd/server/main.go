@@ -10,13 +10,14 @@ import (
 	"github.com/Xecutables/Nebula.Conduit/config"
 	"github.com/Xecutables/Nebula.Conduit/internal/api"
 	"github.com/Xecutables/Nebula.Conduit/pkg/database"
+	"github.com/Xecutables/Nebula.Conduit/pkg/logger"
 )
 
 func main() {
 	envValue := os.Getenv("NEBULA_CONDUIT_HOME")
-
+	logger := logger.InitLogger()
 	if envValue == "" {
-		fmt.Println("Environment variable NEBULA_CONDUIT_HOME is not set.")
+		logger.Error().Msg("NEBULA_CONDUIT_HOME environment variable is not set")
 	}
 
 	configPath := filepath.Join(envValue, "config.yaml")
@@ -24,20 +25,20 @@ func main() {
 	// Load configuration
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		logger.Error().Err(err).Msg("Failed to load configuration")
 	}
 
 	// Initialize database
 	db, err := database.InitDB(cfg.Database.Path)
 	if err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		logger.Error().Err(err).Msg("Failed to initialize database")
 	}
 
 	// Create server
 	server := api.NewServer(db, cfg)
 
 	// Start server
-	log.Printf("Starting server on %s:%d", cfg.Server.Host, cfg.Server.Port)
+	logger.Info().Msgf("Starting server on %s:%d", cfg.Server.Host, cfg.Server.Port)
 	log.Fatal(http.ListenAndServe(
 		fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
 		server.Router,
