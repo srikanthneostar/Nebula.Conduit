@@ -13,6 +13,19 @@ import (
 	"github.com/Xecutables/Nebula.Conduit/pkg/logger"
 )
 
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	envValue := os.Getenv("NEBULA_CONDUIT_HOME")
 	logger := logger.InitLogger()
@@ -41,6 +54,6 @@ func main() {
 	logger.Info().Msgf("Starting server on %s:%d", cfg.Server.Host, cfg.Server.Port)
 	log.Fatal(http.ListenAndServe(
 		fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
-		server.Router,
+		corsMiddleware(server.Router),
 	))
 }
