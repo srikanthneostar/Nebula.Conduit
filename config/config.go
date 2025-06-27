@@ -21,6 +21,12 @@ type Config struct {
 		Path string `mapstructure:"PATH"`
 	} `mapstructure:"database"`
 
+	TLSConfig struct {
+		Enabled  bool   `mapstructure:"enabled"`
+		CertFile string `mapstructure:"cert_file"`
+		KeyFile  string `mapstructure:"key_file"`
+	} `mapstructure:"tls_config"`
+
 	Paths struct {
 		PythonScriptsHome string   `mapstructure:"PYTHON_SCRIPTS_HOME"`
 		AllowedPaths      []string `mapstructure:"ALLOWED_PATHS"`

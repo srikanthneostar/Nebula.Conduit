@@ -52,8 +52,18 @@ func main() {
 
 	// Start server
 	logger.Info().Msgf("Starting server on %s:%d", cfg.Server.Host, cfg.Server.Port)
-	log.Fatal(http.ListenAndServe(
-		fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
-		corsMiddleware(server.Router),
-	))
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+	if cfg.TLSConfig.Enabled {
+		log.Fatal(http.ListenAndServeTLS(
+			addr,
+			cfg.TLSConfig.CertFile,
+			cfg.TLSConfig.KeyFile,
+			corsMiddleware(server.Router),
+		))
+	} else {
+		log.Fatal(http.ListenAndServe(
+			fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
+			corsMiddleware(server.Router),
+		))
+	}
 }
