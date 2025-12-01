@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nebula-conduit
+  labels:
+    app: nebula-conduit
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nebula-conduit
+  template:
+    metadata:
+      labels:
+        app: nebula-conduit
+    spec:
+      containers:
+      - name: nebula-conduit
+        image: srikanthneostar/nebula-conduit:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        - name: NEBULA_CONDUIT_HOME
+          value: "/app/commons"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTPS
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTPS
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        volumeMounts:
+        - name: config
+          mountPath: /app/commons/config.yaml
+          subPath: config.yaml
+        - name: tls-certs
+          mountPath: /app/commons/cert.pem
+          subPath: cert.pem
+        - name: tls-certs
+          mountPath: /app/commons/key.pem
+          subPath: key.pem
+        - name: data
+          mountPath: /app/commons/Nebula.Conduit.db
+          subPath: Nebula.Conduit.db
+      volumes:
+      - name: config
+        configMap:
+          name: nebula-conduit-config
+      - name: tls-certs
+        secret:
+          secretName: nebula-conduit-tls
+      - name: data
+        persistentVolumeClaim:
+          claimName: nebula-conduit-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nebula-conduit-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi

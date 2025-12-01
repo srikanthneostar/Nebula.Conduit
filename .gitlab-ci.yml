@@ -1,0 +1,69 @@
+# .gitlab-ci.yml - Build, push to Docker Hub, update Kubernetes deployment
+image: docker:24.0.2
+
+stages:
+  - docker-login
+  - image-build-push
+  - kubernetes-deploy
+
+variables:
+  DOCKER_TLS_CERTDIR: ""
+  REGISTRY_TAG: "${DOCKER_USR}/nebula-conduit:${CI_PIPELINE_ID}"
+  KUBECONFIG: /home/gitlab-runner/.kube/config-$DEPLOY_TO
+
+services:
+  - name: docker:24-dind
+    alias: docker
+
+default:
+  tags:
+    - develop
+
+# -------- Docker Login ----------
+docker-login:
+  stage: docker-login
+  script:
+    - docker login -u $DOCKER_USR -p $DOCKER_PASS
+
+# -------- Build & Push to Docker Hub ----------
+build-push-conduit:
+  stage: image-build-push
+  variables:
+    DOCKER_DRIVER: overlay2
+  script:
+    - echo "Building Docker image..."
+    - docker build -t $REGISTRY_TAG -f $CI_PROJECT_DIR/Dockerfile $CI_PROJECT_DIR
+    - echo "Pushing image to Docker Hub..."
+    - docker push $REGISTRY_TAG
+    - docker rmi --force $REGISTRY_TAG
+  needs:
+    - job: docker-login
+  artifacts:
+    untracked: false
+    when: on_success
+    access: all
+    expire_in: 1 hour
+
+# -------- Deploy to Kubernetes ----------
+kubernetes-apply:
+  stage: kubernetes-deploy
+  image: bitnami/kubectl:1.27
+  before_script:
+    - echo "Printing kubectl version"
+    - kubectl version --client
+  script:
+    - echo "Applying Deployment"
+    - kubectl apply -f $CI_PROJECT_DIR/k8s/k8s-deployment.yaml --validate=false -n core-insights-nebula
+    - echo "Applying Service"
+    - kubectl apply -f $CI_PROJECT_DIR/k8s/k8s-service.yaml --validate=false -n core-insights-nebula
+  needs:
+    - job: build-push-conduit
+
+update-container-image:
+  stage: kubernetes-deploy
+  image: bitnami/kubectl:1.27
+  script:
+    - kubectl set image deployment/nebula-conduit nebula-conduit=$REGISTRY_TAG -n core-insights-nebula
+    - kubectl rollout status deployment/nebula-conduit -n core-insights-nebula --timeout=900s
+  needs:
+    - job: kubernetes-apply

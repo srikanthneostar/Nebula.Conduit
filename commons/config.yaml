@@ -8,8 +8,8 @@ auth:
 
 tls_config:
   enabled: true
-  cert_file: "C:/Nebula.Conduit/commons/cert.pem"
-  key_file: "C:/Nebula.Conduit/commons/key.pem"
+  cert_file: "commons/cert.pem"
+  key_file: "commons/key.pem"
 
 database:
   path: "Nebula.Conduit.db"
