@@ -22,8 +22,8 @@ RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o nebula-conduit ./
 # Runtime stage
 FROM alpine:latest
 
-# Install runtime dependencies
-RUN apk --no-cache add ca-certificates sqlite-libs
+# Install runtime dependencies including Python
+RUN apk --no-cache add ca-certificates sqlite-libs python3 py3-pip
 
 # Create app directory
 WORKDIR /app
@@ -33,6 +33,10 @@ COPY --from=builder /app/nebula-conduit .
 
 # Copy commons directory (config, certs, migrations, algorithms, etc.)
 COPY --from=builder /app/commons ./commons
+
+# Install Python dependencies and wheel package
+RUN pip3 install --no-cache-dir -r /app/commons/algorithms/requirements.txt && \
+    pip3 install --no-cache-dir /app/commons/algorithms/nebula_fabric-3.10.0-py3-none-any.whl
 
 # Set environment variable
 ENV NEBULA_CONDUIT_HOME=/app/commons

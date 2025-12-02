@@ -1,0 +1,13 @@
+pandas
+numpy
+python-jose
+cryptography
+pycryptodome
+pyodbc
+kafka-python
+paho-mqtt
+pika
+python-dotenv
+SQLAlchemy
+xgboost
+scikit-learn
