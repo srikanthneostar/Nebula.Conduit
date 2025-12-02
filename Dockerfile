@@ -22,8 +22,9 @@ RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o nebula-conduit ./
 # Runtime stage
 FROM alpine:latest
 
-# Install runtime dependencies including Python
-RUN apk --no-cache add ca-certificates sqlite-libs python3 py3-pip
+# Install runtime dependencies including Python and build tools
+RUN apk --no-cache add ca-certificates sqlite-libs python3 py3-pip \
+    gcc g++ musl-dev python3-dev cmake make
 
 # Create app directory
 WORKDIR /app
