@@ -15,9 +15,9 @@ database:
   path: "Nebula.Conduit.db"
 
 paths:
-  python_scripts_home: "/opt/algorithms"
+  python_scripts_home: "commons/algorithms"
   allowed_paths:
-    - "/opt/algorithms"
+    - "commons/algorithms"
 
 setlog:
   loglevel : "info"
