@@ -2,8 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: nebula-conduit
-  labels:
-    app: nebula-conduit
+  namespace: core-insights-nebula
 spec:
   type: LoadBalancer
   ports:
@@ -13,33 +12,3 @@ spec:
     name: https
   selector:
     app: nebula-conduit
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: nebula-conduit-config
-data:
-  config.yaml: |
-    server:
-      host: "0.0.0.0"
-      port: 8080
-
-    auth:
-      jwt_secret: "your_secure_secret_here"
-      token_expiry_hours: 24
-
-    tls_config:
-      enabled: true
-      cert_file: "commons/cert.pem"
-      key_file: "commons/key.pem"
-
-    database:
-      path: "Nebula.Conduit.db"
-
-    paths:
-      python_scripts_home: "/opt/scripts"
-      allowed_paths:
-        - "/opt/scripts"
-
-    setlog:
-      loglevel: "info"

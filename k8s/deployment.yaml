@@ -1,9 +1,9 @@
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: nebula-conduit
-  labels:
-    app: nebula-conduit
+  namespace: core-insights-nebula
 spec:
   replicas: 1
   selector:
@@ -14,31 +14,25 @@ spec:
       labels:
         app: nebula-conduit
     spec:
+      progressDeadlineSeconds: 900
       containers:
       - name: nebula-conduit
         image: srikanthneostar/nebula-conduit:latest
-        imagePullPolicy: Always
         ports:
         - containerPort: 8080
-          name: http
-          protocol: TCP
+        imagePullPolicy: Always
         env:
+        - name: TZ
+          value: Asia/Kolkata
         - name: NEBULA_CONDUIT_HOME
-          value: "/app/commons"
+          value: /app/commons
         resources:
           requests:
-            memory: "128Mi"
-            cpu: "100m"
+            memory: "256Mi"
+            cpu: "250m"
           limits:
             memory: "512Mi"
             cpu: "500m"
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 8080
-            scheme: HTTPS
-          initialDelaySeconds: 30
-          periodSeconds: 10
         readinessProbe:
           httpGet:
             path: /health
@@ -46,39 +40,5 @@ spec:
             scheme: HTTPS
           initialDelaySeconds: 10
           periodSeconds: 5
-          timeoutSeconds: 3
-          failureThreshold: 3
-        volumeMounts:
-        - name: config
-          mountPath: /app/commons/config.yaml
-          subPath: config.yaml
-        - name: tls-certs
-          mountPath: /app/commons/cert.pem
-          subPath: cert.pem
-        - name: tls-certs
-          mountPath: /app/commons/key.pem
-          subPath: key.pem
-        - name: data
-          mountPath: /app/commons/Nebula.Conduit.db
-          subPath: Nebula.Conduit.db
-      volumes:
-      - name: config
-        configMap:
-          name: nebula-conduit-config
-      - name: tls-certs
-        secret:
-          secretName: nebula-conduit-tls
-      - name: data
-        persistentVolumeClaim:
-          claimName: nebula-conduit-pvc
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: nebula-conduit-pvc
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 5Gi
+      imagePullSecrets:
+      - name: regcred
