@@ -34,9 +34,13 @@ COPY --from=builder /app/nebula-conduit .
 # Copy commons directory (config, certs, migrations, algorithms, etc.)
 COPY --from=builder /app/commons ./commons
 
-# Install Python dependencies and wheel package
-RUN pip3 install --no-cache-dir -r /app/commons/algorithms/requirements.txt && \
-    pip3 install --no-cache-dir /app/commons/algorithms/nebula_fabric-3.10.0-py3-none-any.whl
+# Create virtual environment and install Python dependencies
+RUN python3 -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir -r /app/commons/algorithms/requirements.txt && \
+    /opt/venv/bin/pip install --no-cache-dir /app/commons/algorithms/nebula_fabric-3.10.0-py3-none-any.whl
+
+# Add venv to PATH so Python scripts use it
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Set environment variable
 ENV NEBULA_CONDUIT_HOME=/app/commons
