@@ -24,7 +24,7 @@ FROM alpine:latest
 
 # Install runtime dependencies including Python and build tools
 RUN apk --no-cache add ca-certificates sqlite-libs python3 py3-pip \
-    gcc g++ musl-dev python3-dev cmake make
+    gcc g++ musl-dev python3-dev cmake make linux-headers
 
 # Create app directory
 WORKDIR /app
