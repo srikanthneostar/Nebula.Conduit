@@ -34,6 +34,9 @@ COPY --from=builder /app/nebula-conduit .
 # Copy commons directory (config, certs, migrations, etc.)
 COPY --from=builder /app/commons ./commons
 
+# Copy algorithms folder
+COPY --from=builder /app/algorithms /opt/algorithms
+
 # Set environment variable
 ENV NEBULA_CONDUIT_HOME=/app/commons
 

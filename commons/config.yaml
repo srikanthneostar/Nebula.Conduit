@@ -15,10 +15,9 @@ database:
   path: "Nebula.Conduit.db"
 
 paths:
-  python_scripts_home: "C:/nebula.rivulet/fabric/build/lib/algorithms"
+  python_scripts_home: "/opt/algorithms"
   allowed_paths:
-    # - "/opt/pyexec/scripts"
-    - "C:/nebula.rivulet/fabric/build/lib/algorithms"
+    - "/opt/algorithms"
 
 setlog:
   loglevel : "info"
