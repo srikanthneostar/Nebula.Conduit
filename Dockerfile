@@ -37,8 +37,7 @@ COPY --from=builder /app/commons ./commons
 
 # Create virtual environment and install Python dependencies
 RUN python3 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --no-cache-dir -r /app/commons/algorithms/requirements.txt && \
-    /opt/venv/bin/pip install --no-cache-dir /app/commons/algorithms/nebula_fabric-3.10.0-py3-none-any.whl
+    /opt/venv/bin/pip install --no-cache-dir /app/commons/libraries/nebula_fabric-3.10.0-py3-none-any.whl
 
 # Add venv to PATH so Python scripts use it
 ENV PATH="/opt/venv/bin:$PATH"

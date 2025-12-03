@@ -63,19 +63,39 @@ func NewPythonExecutor(repo repository.TaskRepository, cfg *config.PathConfig, t
 }
 
 func (e *PythonExecutor) validateScriptPath(scriptName string) (string, error) {
+	// Add .py extension if not present
+	if filepath.Ext(scriptName) == "" {
+		scriptName = scriptName + ".py"
+	}
+
 	if err := e.validator.Validate(scriptName, nil); err != nil {
 		e.logger.Error().Err(err).Str("script_name", scriptName).Msg("Script validation failed")
 		return "", err
 	}
 
 	for _, basePath := range e.pathConfig.AllowedPaths {
-		fullPath := filepath.Join(basePath, scriptName)
+		// Convert relative paths to absolute
+		absBasePath := basePath
+		if !filepath.IsAbs(basePath) {
+			// If relative, resolve from current working directory
+			cwd, err := os.Getwd()
+			if err != nil {
+				e.logger.Error().Err(err).Msg("Failed to get current working directory")
+				continue
+			}
+			absBasePath = filepath.Join(cwd, basePath)
+		}
+
+		fullPath := filepath.Join(absBasePath, scriptName)
+		e.logger.Debug().Str("checking_path", fullPath).Msg("Checking script path")
+
 		if _, err := os.Stat(fullPath); err == nil {
+			e.logger.Info().Str("found_path", fullPath).Msg("Script found")
 			return fullPath, nil
 		}
 	}
 
-	return "", fmt.Errorf("script %s not found in allowed paths", scriptName)
+	return "", fmt.Errorf("script %s not found in allowed paths: %v", scriptName, e.pathConfig.AllowedPaths)
 }
 
 func (e *PythonExecutor) prepareCommand(scriptPath string, args []string) (*exec.Cmd, error) {
