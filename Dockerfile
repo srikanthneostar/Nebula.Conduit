@@ -20,7 +20,7 @@ COPY . .
 RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o nebula-conduit ./cmd/server
 
 # Runtime stage
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 # Install runtime dependencies including Python and ODBC
 RUN apt-get update && apt-get install -y --no-install-recommends \
