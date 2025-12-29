@@ -1,0 +1,115 @@
+{
+  "pipelines": [
+    {
+      "name": "data_ingestion_pipeline",
+      "description": "Daily data ingestion and processing pipeline",
+      "cron_expression": "0 0 2 * * *",
+      "enabled": true,
+      "max_retries": 2,
+      "timeout_minutes": 120,
+      "jobs": [
+        {
+          "name": "extract_data",
+          "script_name": "extract_data.py",
+          "args": [
+            "--source",
+            "database",
+            "--date",
+            "today"
+          ],
+          "env": {
+            "DB_HOST": "localhost",
+            "DB_PORT": "5432",
+            "LOG_LEVEL": "INFO"
+          },
+          "timeout_minutes": 30,
+          "wait_after_seconds": 10,
+          "continue_on_error": false,
+          "retries": 3
+        },
+        {
+          "name": "transform_data",
+          "script_name": "transform_data.py",
+          "args": [
+            "--input",
+            "/tmp/raw_data",
+            "--output",
+            "/tmp/processed_data"
+          ],
+          "env": {
+            "MEMORY_LIMIT": "2GB",
+            "PARALLEL_JOBS": "4"
+          },
+          "timeout_minutes": 45,
+          "wait_after_seconds": 5,
+          "continue_on_error": false,
+          "retries": 2
+        },
+        {
+          "name": "load_data",
+          "script_name": "load_data.py",
+          "args": [
+            "--input",
+            "/tmp/processed_data",
+            "--target",
+            "warehouse"
+          ],
+          "env": {
+            "WAREHOUSE_URL": "postgresql://warehouse:5432/dwh"
+          },
+          "timeout_minutes": 60,
+          "wait_after_seconds": 0,
+          "continue_on_error": false,
+          "retries": 2
+        },
+        {
+          "name": "cleanup",
+          "script_name": "cleanup.py",
+          "args": [
+            "--path",
+            "/tmp",
+            "--older-than",
+            "1d"
+          ],
+          "timeout_minutes": 10,
+          "continue_on_error": true,
+          "retries": 1
+        }
+      ]
+    },
+    {
+      "name": "hourly_monitoring",
+      "description": "Hourly system monitoring and alerting",
+      "cron_expression": "0 0 * * * *",
+      "enabled": true,
+      "max_retries": 1,
+      "timeout_minutes": 15,
+      "jobs": [
+        {
+          "name": "check_system_health",
+          "script_name": "monitor_system.py",
+          "args": [
+            "--check",
+            "all"
+          ],
+          "timeout_minutes": 5,
+          "continue_on_error": true
+        },
+        {
+          "name": "send_alerts",
+          "script_name": "send_alerts.py",
+          "args": [
+            "--threshold",
+            "warning"
+          ],
+          "env": {
+            "SMTP_SERVER": "smtp.company.com",
+            "ALERT_EMAIL": "alerts@company.com"
+          },
+          "timeout_minutes": 2,
+          "continue_on_error": true
+        }
+      ]
+    }
+  ]
+}
