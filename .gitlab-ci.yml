@@ -35,7 +35,10 @@ build-push-conduit:
     - docker build -t $REGISTRY_TAG -f $CI_PROJECT_DIR/Dockerfile $CI_PROJECT_DIR
     - echo "Pushing image to Docker Hub..."
     - docker push $REGISTRY_TAG
-    - docker rmi --force $REGISTRY_TAG
+    - echo "Tagging and pushing as latest..."
+    - docker tag $REGISTRY_TAG ${DOCKER_USR}/nebula-conduit:latest
+    - docker push ${DOCKER_USR}/nebula-conduit:latest
+    - docker rmi --force $REGISTRY_TAG ${DOCKER_USR}/nebula-conduit:latest
   needs:
     - job: docker-login
   artifacts:

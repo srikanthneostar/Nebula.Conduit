@@ -6,6 +6,7 @@ metadata:
   namespace: core-insights-nebula
 spec:
   replicas: 1
+  progressDeadlineSeconds: 900
   selector:
     matchLabels:
       app: nebula-conduit
@@ -14,7 +15,6 @@ spec:
       labels:
         app: nebula-conduit
     spec:
-      progressDeadlineSeconds: 900
       containers:
       - name: nebula-conduit
         image: srikanthneostar/nebula-conduit:latest
@@ -38,7 +38,18 @@ spec:
             path: /health
             port: 8080
             scheme: HTTPS
-          initialDelaySeconds: 10
-          periodSeconds: 5
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTPS
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
       imagePullSecrets:
       - name: regcred
