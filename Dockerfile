@@ -36,8 +36,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Create app directory and set permissions
 WORKDIR /app
 
-# Create a non-root user
-RUN groupadd -r appuser && useradd -r -g appuser -u 65534 appuser
+# Create a non-root user (use a different UID since 65534 is taken)
+RUN groupadd -r appuser && useradd -r -g appuser -u 1001 appuser
 
 # Copy binary from builder
 COPY --from=builder /app/nebula-conduit .
