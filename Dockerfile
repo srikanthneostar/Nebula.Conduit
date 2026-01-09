@@ -33,8 +33,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unixodbc-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Create app directory
+# Create app directory and set permissions
 WORKDIR /app
+
+# Create a non-root user
+RUN groupadd -r appuser && useradd -r -g appuser -u 65534 appuser
 
 # Copy binary from builder
 COPY --from=builder /app/nebula-conduit .
@@ -45,6 +48,14 @@ COPY --from=builder /app/commons ./commons
 # Create virtual environment and install Python dependencies
 RUN python3 -m venv /opt/venv && \
     /opt/venv/bin/pip install --no-cache-dir /app/commons/libraries/nebula_fabric-3.10.0-py3-none-any.whl
+
+# Change ownership of app directory to non-root user
+RUN chown -R appuser:appuser /app /opt/venv && \
+    mkdir -p /app/data && \
+    chown appuser:appuser /app/data
+
+# Switch to non-root user
+USER appuser
 
 # Add venv to PATH so Python scripts use it
 ENV PATH="/opt/venv/bin:$PATH"
