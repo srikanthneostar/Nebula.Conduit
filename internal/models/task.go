@@ -1,6 +1,8 @@
 package models
 
-import "time"
+import (
+	"time"
+)
 
 // TaskStatus represents the possible states of a task
 type TaskStatus string
@@ -21,7 +23,7 @@ type Task struct {
 	Args      []string   `json:"args"`
 	Env       []string   `json:"env"`
 	Status    TaskStatus `json:"status"`
-	Output    string     `json:"output"`
+	Output    any        `json:"output"`
 	Error     string     `json:"error"`
 	ExitCode  int        `json:"exit_code"`
 	StartedAt time.Time  `json:"started_at"`

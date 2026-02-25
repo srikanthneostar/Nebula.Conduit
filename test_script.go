@@ -42,8 +42,8 @@ func testExecutor() {
 
 	// Prepare input
 	// taskID := "test-task-id"
-	scriptName := "forecasting.py"
-	args := []string{"--queryid", "4"}
+	scriptName := "pattern_identification.py"
+	args := []string{"--queryid1", "5", "--queryid2", "6"}
 	env := []string{}
 	userID := 1
 
