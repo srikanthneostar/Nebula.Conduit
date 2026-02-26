@@ -198,7 +198,8 @@ func isSinkComponent(compType ComponentType) bool {
 func isProcessorComponent(compType ComponentType) bool {
 	switch compType {
 	case ComponentTypePythonCodeBlock,
-		ComponentTypeLog:
+		ComponentTypeLog,
+		ComponentTypeAttributeUpdate:
 		return true
 	default:
 		return false

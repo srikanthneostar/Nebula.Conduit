@@ -49,9 +49,20 @@ func (l *LogSinkComponent) Execute(ctx context.Context, input <-chan pipeline.Da
 	return nil, l.Write(ctx, input)
 }
 
-// Write consumes data and writes each item to the log file
+// Write consumes data and writes each item to the log file.
+// The file_path supports {{variable}} placeholders resolved from data metadata.
+// If the path is static (no templates), the file is opened once.
+// If dynamic, a new file may be opened per unique resolved path.
 func (l *LogSinkComponent) Write(ctx context.Context, input <-chan pipeline.Data) error {
-	// Ensure parent directory exists
+	// For static paths (no templates), open once
+	if !templateVarRegex.MatchString(l.filePath) {
+		return l.writeStatic(ctx, input)
+	}
+	return l.writeDynamic(ctx, input)
+}
+
+// writeStatic writes all data to a single file
+func (l *LogSinkComponent) writeStatic(ctx context.Context, input <-chan pipeline.Data) error {
 	if dir := filepath.Dir(l.filePath); dir != "" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return fmt.Errorf("failed to create log directory: %w", err)
@@ -72,8 +83,57 @@ func (l *LogSinkComponent) Write(ctx context.Context, input <-chan pipeline.Data
 			if !ok {
 				return nil
 			}
-			line := l.formatLine(data)
-			if _, err := fmt.Fprintln(file, line); err != nil {
+			if _, err := fmt.Fprintln(file, l.formatLine(data)); err != nil {
+				if !l.config.ContinueOnError {
+					return fmt.Errorf("failed to write to log file: %w", err)
+				}
+			}
+		}
+	}
+}
+
+// writeDynamic resolves the file path per message from data metadata
+func (l *LogSinkComponent) writeDynamic(ctx context.Context, input <-chan pipeline.Data) error {
+	openFiles := make(map[string]*os.File)
+	defer func() {
+		for _, f := range openFiles {
+			f.Close()
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case data, ok := <-input:
+			if !ok {
+				return nil
+			}
+
+			resolvedPath := resolveTemplate(l.filePath, data.Metadata)
+
+			file, exists := openFiles[resolvedPath]
+			if !exists {
+				if dir := filepath.Dir(resolvedPath); dir != "" {
+					if err := os.MkdirAll(dir, 0755); err != nil {
+						if !l.config.ContinueOnError {
+							return fmt.Errorf("failed to create directory %s: %w", dir, err)
+						}
+						continue
+					}
+				}
+				var err error
+				file, err = os.OpenFile(resolvedPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+				if err != nil {
+					if !l.config.ContinueOnError {
+						return fmt.Errorf("failed to open log file %s: %w", resolvedPath, err)
+					}
+					continue
+				}
+				openFiles[resolvedPath] = file
+			}
+
+			if _, err := fmt.Fprintln(file, l.formatLine(data)); err != nil {
 				if !l.config.ContinueOnError {
 					return fmt.Errorf("failed to write to log file: %w", err)
 				}

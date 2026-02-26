@@ -18,6 +18,7 @@ func RegisterComponents(factory pipeline.ComponentFactory) {
 	// Processor components
 	factory.Register(pipeline.ComponentTypeLog, NewLogComponent)
 	factory.Register(pipeline.ComponentTypePythonCodeBlock, NewPythonCodeBlockComponent)
+	factory.Register(pipeline.ComponentTypeAttributeUpdate, NewAttributeUpdateComponent)
 
 	// Sink components
 	factory.Register(pipeline.ComponentTypeHTTPPost, NewHTTPPostComponent)
