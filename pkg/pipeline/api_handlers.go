@@ -52,6 +52,16 @@ func (h *PipelineHandlers) CreatePipeline(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// If pipeline is active and has a cron expression, schedule it immediately
+	if def.Status == PipelineStatusActive && def.ExecutionMode == ExecutionModeScheduled && def.CronExpression != "" {
+		if err := h.engine.GetScheduler().Schedule(def); err != nil {
+			log.Error().Err(err).Str("pipeline_id", def.ID).Msg("Failed to schedule pipeline")
+			// Don't fail the creation, just log the error
+		} else {
+			log.Info().Str("pipeline_id", def.ID).Str("cron", def.CronExpression).Msg("Pipeline scheduled")
+		}
+	}
+
 	log.Info().Str("pipeline_id", def.ID).Str("name", def.Name).Msg("Pipeline created")
 	respondWithJSON(w, http.StatusCreated, toPipelineResponse(def))
 }
@@ -163,6 +173,25 @@ func (h *PipelineHandlers) UpdatePipeline(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Handle scheduling changes
+	if existing.ExecutionMode == ExecutionModeScheduled && existing.CronExpression != "" {
+		if existing.Status == PipelineStatusActive {
+			// Schedule or reschedule the pipeline
+			if err := h.engine.GetScheduler().Schedule(existing); err != nil {
+				log.Error().Err(err).Str("pipeline_id", pipelineID).Msg("Failed to schedule pipeline")
+			} else {
+				log.Info().Str("pipeline_id", pipelineID).Str("cron", existing.CronExpression).Msg("Pipeline scheduled")
+			}
+		} else {
+			// Unschedule if status changed to inactive
+			if err := h.engine.GetScheduler().Unschedule(pipelineID); err != nil {
+				log.Warn().Err(err).Str("pipeline_id", pipelineID).Msg("Failed to unschedule pipeline")
+			} else {
+				log.Info().Str("pipeline_id", pipelineID).Msg("Pipeline unscheduled")
+			}
+		}
+	}
+
 	log.Info().Str("pipeline_id", pipelineID).Msg("Pipeline updated")
 	respondWithJSON(w, http.StatusOK, toPipelineResponse(existing))
 }
@@ -173,6 +202,20 @@ func (h *PipelineHandlers) DeletePipeline(w http.ResponseWriter, r *http.Request
 	if pipelineID == "" {
 		respondWithError(w, http.StatusBadRequest, "Pipeline ID is required", "INVALID_REQUEST", nil)
 		return
+	}
+
+	// Read pipeline to check execution mode
+	pipeline, err := h.engine.GetRepository().Read(pipelineID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Pipeline not found", "NOT_FOUND", nil)
+		return
+	}
+
+	// Unschedule if it's a scheduled pipeline
+	if pipeline.ExecutionMode == ExecutionModeScheduled {
+		if err := h.engine.GetScheduler().Unschedule(pipelineID); err != nil {
+			log.Warn().Err(err).Str("pipeline_id", pipelineID).Msg("Failed to unschedule pipeline")
+		}
 	}
 
 	// Stop pipeline if running

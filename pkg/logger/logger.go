@@ -15,11 +15,22 @@ func InitLogger() zerolog.Logger {
 	envValue := os.Getenv("NEBULA_CONDUIT_HOME")
 	if envValue == "" {
 		fmt.Println("Environment variable NEBULA_CONDUIT_HOME is not set.")
+		envValue = "." // fallback to current directory
 	}
 
 	configPath := filepath.Join(envValue, "config.yaml")
+
+	// Use absolute path for log file
+	logPath := filepath.Join(envValue, "logs", "app.log")
+
+	// Ensure logs directory exists
+	logDir := filepath.Dir(logPath)
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		fmt.Printf("Failed to create log directory: %v\n", err)
+	}
+
 	rotator := &lumberjack.Logger{
-		Filename:   "./logs/app.log",
+		Filename:   logPath,
 		MaxSize:    50,
 		MaxBackups: 7,
 		MaxAge:     30,
@@ -45,5 +56,8 @@ func InitLogger() zerolog.Logger {
 
 	logger := zerolog.New(multi).With().Timestamp().Logger()
 	zerolog.SetGlobalLevel(logLevel)
+
+	fmt.Printf("Logger initialized. Writing to: %s\n", logPath)
+
 	return logger
 }

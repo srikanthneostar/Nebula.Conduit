@@ -223,7 +223,25 @@ func (r *SQLPipelineRepository) Update(def PipelineDefinition) error {
 		return fmt.Errorf("pipeline not found: %s", def.ID)
 	}
 
-	// Delete existing components and connections (cascade will handle connections)
+	// Delete existing components and connections
+	// First delete component executions that reference these components
+	_, err = tx.Exec(`
+		DELETE FROM component_executions 
+		WHERE component_id IN (
+			SELECT id FROM pipeline_components WHERE pipeline_id = ?
+		)
+	`, def.ID)
+	if err != nil {
+		return fmt.Errorf("failed to delete component executions: %w", err)
+	}
+
+	// Delete connections
+	_, err = tx.Exec("DELETE FROM pipeline_connections WHERE pipeline_id = ?", def.ID)
+	if err != nil {
+		return fmt.Errorf("failed to delete existing connections: %w", err)
+	}
+
+	// Delete components
 	_, err = tx.Exec("DELETE FROM pipeline_components WHERE pipeline_id = ?", def.ID)
 	if err != nil {
 		return fmt.Errorf("failed to delete existing components: %w", err)
@@ -265,9 +283,46 @@ func (r *SQLPipelineRepository) Update(def PipelineDefinition) error {
 	return nil
 }
 
-// Delete removes a pipeline definition (cascade will delete components and connections)
+// Delete removes a pipeline definition and all related data (components, connections, executions)
 func (r *SQLPipelineRepository) Delete(id string) error {
-	result, err := r.db.Exec("DELETE FROM pipelines WHERE id = ?", id)
+	// Begin transaction for atomic operation
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Delete component executions first (depends on component_id)
+	_, err = tx.Exec(`
+		DELETE FROM component_executions 
+		WHERE component_id IN (
+			SELECT id FROM pipeline_components WHERE pipeline_id = ?
+		)
+	`, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete component executions: %w", err)
+	}
+
+	// Delete pipeline executions
+	_, err = tx.Exec("DELETE FROM pipeline_executions WHERE pipeline_id = ?", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete pipeline executions: %w", err)
+	}
+
+	// Delete pipeline connections
+	_, err = tx.Exec("DELETE FROM pipeline_connections WHERE pipeline_id = ?", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete pipeline connections: %w", err)
+	}
+
+	// Delete pipeline components
+	_, err = tx.Exec("DELETE FROM pipeline_components WHERE pipeline_id = ?", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete pipeline components: %w", err)
+	}
+
+	// Delete the pipeline itself
+	result, err := tx.Exec("DELETE FROM pipelines WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("failed to delete pipeline: %w", err)
 	}
@@ -278,6 +333,11 @@ func (r *SQLPipelineRepository) Delete(id string) error {
 	}
 	if rowsAffected == 0 {
 		return fmt.Errorf("pipeline not found: %s", id)
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return nil

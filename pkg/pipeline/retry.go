@@ -108,6 +108,8 @@ func (ce *ComponentExecutor) Execute(ctx context.Context, input <-chan Data) (<-
 
 // ExecuteSource runs a source component with retry logic
 func (ce *ComponentExecutor) ExecuteSource(ctx context.Context) (<-chan Data, error) {
+	fmt.Printf("    ComponentExecutor[%s]: ExecuteSource called\n", ce.component.ID())
+
 	sourceComp, ok := ce.component.(SourceComponent)
 	if !ok {
 		return nil, fmt.Errorf("component %s is not a source component", ce.component.ID())
@@ -123,9 +125,15 @@ func (ce *ComponentExecutor) ExecuteSource(ctx context.Context) (<-chan Data, er
 	var execErr error
 
 	err := WithRetry(ctx, retryConfig, func(ctx context.Context) error {
+		fmt.Printf("    ComponentExecutor[%s]: Calling Start() method\n", ce.component.ID())
 		var err error
 		output, err = sourceComp.Start(ctx)
 		execErr = err
+		if err != nil {
+			fmt.Printf("    ComponentExecutor[%s]: Start() failed: %v\n", ce.component.ID(), err)
+		} else {
+			fmt.Printf("    ComponentExecutor[%s]: Start() succeeded\n", ce.component.ID())
+		}
 		return err
 	})
 
@@ -180,6 +188,8 @@ func (ce *ComponentExecutor) ExecuteProcessor(ctx context.Context, input <-chan 
 
 // ExecuteSink runs a sink component with retry logic
 func (ce *ComponentExecutor) ExecuteSink(ctx context.Context, input <-chan Data) error {
+	fmt.Printf("    ComponentExecutor[%s]: ExecuteSink called\n", ce.component.ID())
+
 	sinkComp, ok := ce.component.(SinkComponent)
 	if !ok {
 		return fmt.Errorf("component %s is not a sink component", ce.component.ID())
@@ -192,7 +202,14 @@ func (ce *ComponentExecutor) ExecuteSink(ctx context.Context, input <-chan Data)
 	}
 
 	err := WithRetry(ctx, retryConfig, func(ctx context.Context) error {
-		return sinkComp.Write(ctx, input)
+		fmt.Printf("    ComponentExecutor[%s]: Calling Write() method\n", ce.component.ID())
+		err := sinkComp.Write(ctx, input)
+		if err != nil {
+			fmt.Printf("    ComponentExecutor[%s]: Write() failed: %v\n", ce.component.ID(), err)
+		} else {
+			fmt.Printf("    ComponentExecutor[%s]: Write() completed successfully\n", ce.component.ID())
+		}
+		return err
 	})
 
 	if err != nil {

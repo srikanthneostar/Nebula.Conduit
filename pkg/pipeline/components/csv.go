@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/Xecutables/Nebula.Conduit/pkg/pipeline"
@@ -14,11 +15,15 @@ import (
 
 // CSVReaderComponent reads data from CSV files
 type CSVReaderComponent struct {
-	config    pipeline.ComponentConfig
-	filePath  string
-	delimiter rune
-	hasHeader bool
-	encoding  string
+	config        pipeline.ComponentConfig
+	filePath      string
+	delimiter     rune
+	hasHeader     bool
+	encoding      string
+	archiveOnRead bool
+	moveOnError   bool
+	archiveFolder string
+	errorFolder   string
 }
 
 // NewCSVReaderComponent creates a new CSV Reader component
@@ -47,12 +52,43 @@ func NewCSVReaderComponent(config pipeline.ComponentConfig) (pipeline.Component,
 		encoding = encodingParam
 	}
 
+	// Extract archive_on_read flag (optional, defaults to false)
+	archiveOnRead := false
+	if archiveParam, ok := config.Parameters["archive_on_read"].(bool); ok {
+		archiveOnRead = archiveParam
+	}
+
+	// Extract move_on_error flag (optional, defaults to false)
+	moveOnError := false
+	if errorParam, ok := config.Parameters["move_on_error"].(bool); ok {
+		moveOnError = errorParam
+	}
+
+	// Determine archive and error folder paths
+	fileDir := filepath.Dir(filePath)
+	archiveFolder := filepath.Join(fileDir, "archive")
+	errorFolder := filepath.Join(fileDir, "error")
+
+	// Allow custom archive folder path
+	if customArchive, ok := config.Parameters["archive_folder"].(string); ok && customArchive != "" {
+		archiveFolder = customArchive
+	}
+
+	// Allow custom error folder path
+	if customError, ok := config.Parameters["error_folder"].(string); ok && customError != "" {
+		errorFolder = customError
+	}
+
 	return &CSVReaderComponent{
-		config:    config,
-		filePath:  filePath,
-		delimiter: delimiter,
-		hasHeader: hasHeader,
-		encoding:  encoding,
+		config:        config,
+		filePath:      filePath,
+		delimiter:     delimiter,
+		hasHeader:     hasHeader,
+		encoding:      encoding,
+		archiveOnRead: archiveOnRead,
+		moveOnError:   moveOnError,
+		archiveFolder: archiveFolder,
+		errorFolder:   errorFolder,
 	}, nil
 }
 
@@ -68,11 +104,32 @@ func (c *CSVReaderComponent) Start(ctx context.Context) (<-chan pipeline.Data, e
 	go func() {
 		defer close(output)
 
-		if err := c.readAndSend(ctx, output); err != nil {
+		err := c.readAndSend(ctx, output)
+
+		if err != nil {
 			fmt.Printf("CSVReader error: %v\n", err)
+
+			// Move file to error folder if move_on_error is enabled
+			if c.moveOnError {
+				if moveErr := c.moveToErrorFolder(); moveErr != nil {
+					fmt.Printf("CSVReader: Failed to move file to error folder: %v\n", moveErr)
+				} else {
+					fmt.Printf("CSVReader: File moved to error folder successfully\n")
+				}
+			}
+
 			// Log error but continue if continue_on_error is true
 			if !c.config.ContinueOnError {
 				return
+			}
+		} else {
+			// Move file to archive folder if archive_on_read is enabled and read was successful
+			if c.archiveOnRead {
+				if archiveErr := c.moveToArchiveFolder(); archiveErr != nil {
+					fmt.Printf("CSVReader: Failed to move file to archive folder: %v\n", archiveErr)
+				} else {
+					fmt.Printf("CSVReader: File moved to archive folder successfully\n")
+				}
 			}
 		}
 	}()
@@ -211,4 +268,60 @@ func (c *CSVReaderComponent) ID() string {
 // Config returns the component configuration
 func (c *CSVReaderComponent) Config() pipeline.ComponentConfig {
 	return c.config
+}
+
+// moveToArchiveFolder moves the CSV file to the archive folder with timestamp
+func (c *CSVReaderComponent) moveToArchiveFolder() error {
+	fmt.Printf("CSVReader: Moving file to archive folder: %s\n", c.archiveFolder)
+
+	// Create archive folder if it doesn't exist
+	if err := os.MkdirAll(c.archiveFolder, 0755); err != nil {
+		return fmt.Errorf("failed to create archive folder: %w", err)
+	}
+
+	// Generate new filename with timestamp
+	fileName := filepath.Base(c.filePath)
+	fileExt := filepath.Ext(fileName)
+	fileNameWithoutExt := fileName[:len(fileName)-len(fileExt)]
+	timestamp := time.Now().Format("20060102_150405")
+	newFileName := fmt.Sprintf("%s_archive_%s%s", fileNameWithoutExt, timestamp, fileExt)
+	newFilePath := filepath.Join(c.archiveFolder, newFileName)
+
+	fmt.Printf("CSVReader: Renaming %s to %s\n", c.filePath, newFilePath)
+
+	// Move (rename) the file
+	if err := os.Rename(c.filePath, newFilePath); err != nil {
+		return fmt.Errorf("failed to move file to archive: %w", err)
+	}
+
+	fmt.Printf("CSVReader: File archived successfully as %s\n", newFileName)
+	return nil
+}
+
+// moveToErrorFolder moves the CSV file to the error folder with timestamp
+func (c *CSVReaderComponent) moveToErrorFolder() error {
+	fmt.Printf("CSVReader: Moving file to error folder: %s\n", c.errorFolder)
+
+	// Create error folder if it doesn't exist
+	if err := os.MkdirAll(c.errorFolder, 0755); err != nil {
+		return fmt.Errorf("failed to create error folder: %w", err)
+	}
+
+	// Generate new filename with timestamp
+	fileName := filepath.Base(c.filePath)
+	fileExt := filepath.Ext(fileName)
+	fileNameWithoutExt := fileName[:len(fileName)-len(fileExt)]
+	timestamp := time.Now().Format("20060102_150405")
+	newFileName := fmt.Sprintf("%s_error_%s%s", fileNameWithoutExt, timestamp, fileExt)
+	newFilePath := filepath.Join(c.errorFolder, newFileName)
+
+	fmt.Printf("CSVReader: Renaming %s to %s\n", c.filePath, newFilePath)
+
+	// Move (rename) the file
+	if err := os.Rename(c.filePath, newFilePath); err != nil {
+		return fmt.Errorf("failed to move file to error folder: %w", err)
+	}
+
+	fmt.Printf("CSVReader: File moved to error folder successfully as %s\n", newFileName)
+	return nil
 }

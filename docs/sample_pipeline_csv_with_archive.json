@@ -1,6 +1,6 @@
 {
-  "name": "CSV Reader to Log Pipeline",
-  "description": "Reads employee CSV, uses attribute_update to set the log file path and log level, then log_sink references those as {{variables}}",
+  "name": "CSV Reader with Archive to Log Pipeline",
+  "description": "Reads employee CSV with archive support, uses attribute_update to set log path and options, then writes to log file",
   "execution_mode": "scheduled",
   "cron_expression": "*/2 * * * *",
   "status": "active",
@@ -9,7 +9,10 @@
       "id": "csv-reader-1",
       "type": "csv_reader",
       "parameters": {
-        "file_path": "C:/Nebula.Conduit/docs/sample_data.csv"
+        "file_path": "C:/Nebula.Conduit/docs/sample_data.csv",
+        "has_header": true,
+        "archive_on_read": true,
+        "move_on_error": true
       },
       "retry_count": 2,
       "retry_delay": 5000000000,
@@ -23,11 +26,15 @@
         "mappings": [
           {
             "name": "log_output_path",
-            "expression": "C:/Nebula.Conduit/logs/pipeline_output.log"
+            "expression": "C:/tmp/pipeline_output.log"
           },
           {
             "name": "log_output_level",
             "expression": "info"
+          },
+          {
+            "name": "log_format",
+            "expression": "json"
           }
         ]
       },
@@ -41,7 +48,7 @@
       "parameters": {
         "file_path": "{{log_output_path}}",
         "log_level": "{{log_output_level}}",
-        "format": "json",
+        "format": "{{log_format}}",
         "include_data": true,
         "decode_payload": true
       },

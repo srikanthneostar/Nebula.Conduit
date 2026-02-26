@@ -46,6 +46,15 @@ func InitDB(path string) (*sql.DB, error) {
 		return nil, err
 	}
 
+	// Enable foreign key constraints (required for SQLite)
+	_, err = db.Exec("PRAGMA foreign_keys = ON")
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to enable foreign key constraints")
+		db.Close()
+		return nil, err
+	}
+	log.Info().Msg("Foreign key constraints enabled")
+
 	// Apply migrations
 	if err := applyMigrations(db); err != nil {
 		db.Close()
