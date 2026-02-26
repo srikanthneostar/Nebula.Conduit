@@ -644,7 +644,8 @@ func validateLogSinkConfig(config ComponentConfig) error {
 		return fmt.Errorf("Log_Sink_Component 'file_path' must be a string")
 	}
 
-	if filePath == "" {
+	// Allow template variables for file_path
+	if !isTemplateVariable(filePath) && filePath == "" {
 		return fmt.Errorf("Log_Sink_Component 'file_path' cannot be empty")
 	}
 
@@ -656,6 +657,11 @@ func validateLogSinkConfig(config ComponentConfig) error {
 	logLevel, ok := logLevelParam.(string)
 	if !ok {
 		return fmt.Errorf("Log_Sink_Component 'log_level' must be a string")
+	}
+
+	// Allow template variables (e.g., {{variable_name}})
+	if isTemplateVariable(logLevel) {
+		return nil
 	}
 
 	validLevels := map[string]bool{
@@ -670,6 +676,11 @@ func validateLogSinkConfig(config ComponentConfig) error {
 	}
 
 	return nil
+}
+
+// isTemplateVariable checks if a string is a template variable (e.g., {{variable_name}})
+func isTemplateVariable(s string) bool {
+	return strings.HasPrefix(s, "{{") && strings.HasSuffix(s, "}}")
 }
 
 // validateAttributeUpdateConfig validates Attribute Update component configuration

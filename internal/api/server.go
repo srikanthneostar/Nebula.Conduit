@@ -93,6 +93,9 @@ type Server struct {
 	db          *sql.DB
 	startTime   time.Time
 
+	// Pipeline engine
+	pipelineEngine *pipeline.PipelineEngine
+
 	// Backpressure components
 	backpressureConfig *BackpressureConfig
 	circuitBreaker     *CircuitBreaker
@@ -188,6 +191,25 @@ func NewServer(db *sql.DB, cfg *config.Config) *Server {
 	executor := executor.NewPythonExecutor(taskRepo, cfg.GetPathConfig(), 1*time.Hour)
 	s.taskService = task.NewTaskService(taskRepo, executor, validator)
 
+	// Initialize pipeline engine
+	pipelineFactory := pipeline.NewComponentFactory()
+	components.RegisterComponents(pipelineFactory)
+	pipelineRepo := pipeline.NewSQLPipelineRepository(db)
+	pipelineMetrics := pipeline.NewDefaultMetricsCollector()
+	pipelineConfig := pipeline.PipelineEngineConfig{
+		MaxConcurrentInstances:    10,
+		MaxGoroutinesPerInstance:  50,
+		ExecutionHistoryRetention: 30,
+	}
+	s.pipelineEngine = pipeline.NewPipelineEngine(db, pipelineRepo, pipelineFactory, nil, &log.Logger, pipelineMetrics, pipelineConfig)
+
+	// Initialize the pipeline engine to start scheduler and load active pipelines
+	if err := s.pipelineEngine.Initialize(context.Background()); err != nil {
+		log.Error().Err(err).Msg("Failed to initialize pipeline engine")
+	} else {
+		log.Info().Msg("Pipeline engine initialized successfully")
+	}
+
 	// Start background workers
 	s.startTaskQueueWorker()
 	s.startResourceMonitor()
@@ -225,18 +247,8 @@ func NewServer(db *sql.DB, cfg *config.Config) *Server {
 		r.Post("/tasks/{id}/stop", s.handleStopTask)
 		r.Get("/tasks", s.handleListTasks)
 
-		// Pipeline engine routes
-		pipelineFactory := pipeline.NewComponentFactory()
-		components.RegisterComponents(pipelineFactory)
-		pipelineRepo := pipeline.NewSQLPipelineRepository(db)
-		pipelineMetrics := pipeline.NewDefaultMetricsCollector()
-		pipelineConfig := pipeline.PipelineEngineConfig{
-			MaxConcurrentInstances:    10,
-			MaxGoroutinesPerInstance:  50,
-			ExecutionHistoryRetention: 30,
-		}
-		pipelineEngine := pipeline.NewPipelineEngine(db, pipelineRepo, pipelineFactory, nil, &log.Logger, pipelineMetrics, pipelineConfig)
-		pipeline.RegisterRoutes(r, pipelineEngine)
+		// Pipeline engine routes - use the server's pipeline engine instance
+		pipeline.RegisterRoutes(r, s.pipelineEngine)
 	})
 
 	return s
