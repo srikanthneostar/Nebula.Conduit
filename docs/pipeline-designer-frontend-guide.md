@@ -1292,7 +1292,7 @@ function getDefaultParameters(type: ComponentType): Record<string, any> {
     http_get:           { url: 'https://api.example.com/data' },
     http_post:          { url: 'https://api.example.com/sink', content_type: 'application/json' },
     sql_query:          { connection_string: '', query: 'SELECT * FROM table_name' },
-    csv_reader:         { file_path: '/path/to/data.csv' },
+    csv_reader:         { file_path: '/path/to/data.csv', has_header: true, delimiter: ',', archive_on_read: false, move_on_error: false },
     kafka_consumer:     { brokers: ['localhost:9092'], topic: 'my-topic', group_id: 'my-group' },
     kafka_producer:     { brokers: ['localhost:9092'], topic: 'my-topic' },
     rabbitmq_consumer:  { connection_url: 'amqp://guest:guest@localhost:5672/', queue: 'my-queue' },
@@ -1303,7 +1303,7 @@ function getDefaultParameters(type: ComponentType): Record<string, any> {
     python_code_block:  { code: '# Transform data here\nresult = data' },
     log:                { log_level: 'info' },
     attribute_update:   { mappings: [{ name: 'my_var', expression: '{{field_name}}' }] },
-    log_sink:           { file_path: '/path/to/output.log', log_level: 'info', format: 'json' },
+    log_sink:           { file_path: '/path/to/output.log', log_level: 'info', format: 'json', include_data: true, decode_payload: true },
   };
   return defaults[type] ?? {};
 }
@@ -1667,7 +1667,13 @@ const COMPONENT_PARAMS: Record<ComponentType, ParamDef[]> = {
                        { key: 'content_type', label: 'Content Type', type: 'text', required: true }],
   sql_query:          [{ key: 'connection_string', label: 'Connection String', type: 'text', required: true },
                        { key: 'query', label: 'SQL Query', type: 'textarea', required: true }],
-  csv_reader:         [{ key: 'file_path', label: 'File Path', type: 'text', required: true }],
+  csv_reader:         [{ key: 'file_path', label: 'File Path', type: 'text', required: true },
+                       { key: 'has_header', label: 'Has Header Row', type: 'checkbox', required: false },
+                       { key: 'delimiter', label: 'Delimiter', type: 'text', required: false },
+                       { key: 'archive_on_read', label: 'Archive After Read', type: 'checkbox', required: false },
+                       { key: 'move_on_error', label: 'Move to Error Folder on Failure', type: 'checkbox', required: false },
+                       { key: 'archive_folder', label: 'Archive Folder', type: 'text', required: false },
+                       { key: 'error_folder', label: 'Error Folder', type: 'text', required: false }],
   kafka_consumer:     [{ key: 'brokers', label: 'Brokers (comma-separated)', type: 'text', required: true },
                        { key: 'topic', label: 'Topic', type: 'text', required: true },
                        { key: 'group_id', label: 'Group ID', type: 'text', required: false }],
@@ -1697,13 +1703,15 @@ const COMPONENT_PARAMS: Record<ComponentType, ParamDef[]> = {
                          options: [{ value: 'debug', label: 'Debug' }, { value: 'info', label: 'Info' },
                                    { value: 'warn', label: 'Warn' }, { value: 'error', label: 'Error' }] },
                        { key: 'format', label: 'Format', type: 'select', required: false,
-                         options: [{ value: 'json', label: 'JSON' }, { value: 'text', label: 'Text' }] }],
+                         options: [{ value: 'json', label: 'JSON' }, { value: 'text', label: 'Text' }] },
+                       { key: 'include_data', label: 'Include Payload Data', type: 'checkbox', required: false },
+                       { key: 'decode_payload', label: 'Decode JSON Payload', type: 'checkbox', required: false }],
 };
 
 interface ParamDef {
   key: string;
   label: string;
-  type: 'text' | 'number' | 'textarea' | 'select' | 'mappings';
+  type: 'text' | 'number' | 'textarea' | 'select' | 'checkbox' | 'mappings';
   required: boolean;
   options?: { value: string; label: string }[];
 }
@@ -1773,6 +1781,19 @@ export default function PipelineConfigPanel({ node, onConfigChange, onDelete, on
               options={param.options ?? []}
               required={param.required}
             />
+          ) : param.type === 'checkbox' ? (
+            <label style={{
+              display: 'flex', alignItems: 'center', gap: spacing.sm,
+              cursor: 'pointer', fontSize: '0.875rem', color: themeColors.text.primary,
+            }}>
+              <input
+                type="checkbox"
+                checked={!!config.parameters[param.key]}
+                onChange={e => updateParam(param.key, e.target.checked)}
+                style={{ width: 18, height: 18, accentColor: themeColors.gradients?.primary }}
+              />
+              {param.label}
+            </label>
           ) : (
             <GlassInput
               label={param.label}
@@ -2225,7 +2246,22 @@ Complete reference for all 15 component types, their categories, and required pa
 |------|-------------------|-------------|
 | `http_get` | `url` (string) | Fetches data from an HTTP GET endpoint |
 | `sql_query` | `connection_string` (string), `query` (string) | Executes SQL query against a database |
-| `csv_reader` | `file_path` (string) | Reads and parses a CSV file |
+| `csv_reader` | `file_path` (string) | Reads and parses a CSV file. Supports header detection, custom delimiters, and automatic file archiving/error handling |
+
+#### csv_reader Optional Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `has_header` | bool | `true` | Whether the first row contains column headers |
+| `delimiter` | string | `","` | Column delimiter character |
+| `encoding` | string | `"utf-8"` | File encoding |
+| `archive_on_read` | bool | `false` | Move file to archive folder after successful read |
+| `move_on_error` | bool | `false` | Move file to error folder on read failure |
+| `archive_folder` | string | `<file_dir>/archive` | Custom archive folder path (defaults to `archive/` next to the file) |
+| `error_folder` | string | `<file_dir>/error` | Custom error folder path (defaults to `error/` next to the file) |
+
+| Type | Required Parameters | Description |
+|------|-------------------|-------------|
 | `kafka_consumer` | `brokers` (string[]), `topic` (string) | Consumes messages from a Kafka topic |
 | `rabbitmq_consumer` | `connection_url` (string), `queue` (string) | Consumes messages from a RabbitMQ queue |
 | `hl7_reader` | `file_path` (string) | Parses HL7 v2.x healthcare messages |
@@ -2248,6 +2284,14 @@ Complete reference for all 15 component types, their categories, and required pa
 | `rabbitmq_producer` | `connection_url` (string), `exchange` (string) | Publishes messages to a RabbitMQ exchange |
 | `tcp_write` | `host` (string), `port` (number), `mode` ("server"\|"client") | Writes data to TCP socket |
 | `log_sink` | `file_path` (string), `log_level` (string) | Writes data to a log file. Supports `{{variable}}` in `file_path` |
+
+#### log_sink Optional Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `format` | string | `"text"` | Output format: `"json"` or `"text"` |
+| `include_data` | bool | `true` | Include full data payload in log output. When `false`, only metadata is logged |
+| `decode_payload` | bool | `true` | Decode JSON byte arrays to readable objects. When `false`, payload is logged as raw bytes |
 
 ### Attribute Update — Variable System
 
@@ -2287,22 +2331,24 @@ Expressions support:
 
 ## 17. Sample Pipeline JSON
 
-This is the exact JSON the backend expects for `POST /api/v1/pipelines`.
-Use this as a reference for the designer's save output.
+These are the exact JSON files the backend expects for `POST /api/v1/pipelines`.
+Use these as a reference for the designer's save output. Both sample files are in the `docs/` folder of the backend project.
+
+### Sample 1: CSV Reader to Log (`sample_pipeline_csv_to_log.json`)
 
 ```json
 {
   "name": "CSV Reader to Log Pipeline",
   "description": "Reads employee CSV, uses attribute_update to set the log file path and log level, then log_sink references those as {{variables}}",
   "execution_mode": "scheduled",
-  "cron_expression": "*/5 * * * *",
-  "status": "inactive",
+  "cron_expression": "*/2 * * * *",
+  "status": "active",
   "components": [
     {
       "id": "csv-reader-1",
       "type": "csv_reader",
       "parameters": {
-        "file_path": "/path/to/data.csv"
+        "file_path": "C:/Nebula.Conduit/docs/sample_data.csv"
       },
       "retry_count": 2,
       "retry_delay": 5000000000,
@@ -2316,7 +2362,7 @@ Use this as a reference for the designer's save output.
         "mappings": [
           {
             "name": "log_output_path",
-            "expression": "/logs/pipeline_output.log"
+            "expression": "C:/Nebula.Conduit/logs/pipeline_output.log"
           },
           {
             "name": "log_output_level",
@@ -2325,7 +2371,6 @@ Use this as a reference for the designer's save output.
         ]
       },
       "retry_count": 0,
-      "retry_delay": 0,
       "continue_on_error": true,
       "timeout": 10000000000
     },
@@ -2335,10 +2380,89 @@ Use this as a reference for the designer's save output.
       "parameters": {
         "file_path": "{{log_output_path}}",
         "log_level": "{{log_output_level}}",
-        "format": "json"
+        "format": "json",
+        "include_data": true,
+        "decode_payload": true
       },
       "retry_count": 0,
-      "retry_delay": 0,
+      "continue_on_error": true,
+      "timeout": 10000000000
+    }
+  ],
+  "connections": [
+    {
+      "source_component_id": "csv-reader-1",
+      "target_component_id": "attr-update-1"
+    },
+    {
+      "source_component_id": "attr-update-1",
+      "target_component_id": "log-sink-1"
+    }
+  ]
+}
+```
+
+### Sample 2: CSV Reader with Archive (`sample_pipeline_csv_with_archive.json`)
+
+This sample demonstrates the `archive_on_read` and `move_on_error` features of the CSV reader.
+After a successful read, the source file is moved to an archive folder with a timestamp suffix.
+
+```json
+{
+  "name": "CSV Reader with Archive to Log Pipeline",
+  "description": "Reads employee CSV with archive support, uses attribute_update to set log path and options, then writes to log file",
+  "execution_mode": "scheduled",
+  "cron_expression": "*/2 * * * *",
+  "status": "active",
+  "components": [
+    {
+      "id": "csv-reader-1",
+      "type": "csv_reader",
+      "parameters": {
+        "file_path": "C:/Nebula.Conduit/docs/sample_data.csv",
+        "has_header": true,
+        "archive_on_read": true,
+        "move_on_error": true
+      },
+      "retry_count": 2,
+      "retry_delay": 5000000000,
+      "continue_on_error": false,
+      "timeout": 30000000000
+    },
+    {
+      "id": "attr-update-1",
+      "type": "attribute_update",
+      "parameters": {
+        "mappings": [
+          {
+            "name": "log_output_path",
+            "expression": "C:/tmp/pipeline_output.log"
+          },
+          {
+            "name": "log_output_level",
+            "expression": "info"
+          },
+          {
+            "name": "log_format",
+            "expression": "json"
+          }
+        ]
+      },
+      "retry_count": 0,
+      "continue_on_error": true,
+      "timeout": 10000000000
+    },
+    {
+      "id": "log-sink-1",
+      "type": "log_sink",
+      "parameters": {
+        "file_path": "{{log_output_path}}",
+        "log_level": "{{log_output_level}}",
+        "format": "{{log_format}}",
+        "include_data": true,
+        "decode_payload": true
+      },
+      "retry_count": 0,
       "continue_on_error": true,
       "timeout": 10000000000
     }
@@ -2367,6 +2491,21 @@ The backend uses Go's `time.Duration` which is in nanoseconds:
 In the config panel, show these as seconds to the user and convert:
 - Display: `value / 1_000_000_000` (nanoseconds → seconds)
 - Save: `value * 1_000_000_000` (seconds → nanoseconds)
+
+### Streaming Execution Model
+
+The backend executes pipelines using a streaming architecture based on Go channels. Understanding this helps when debugging execution status in the UI:
+
+- Each component runs as a concurrent goroutine
+- Source components produce data into a `<-chan Data` output channel
+- Processor components read from an input channel, transform data, and write to an output channel
+- Sink components consume from an input channel and write to their destination (file, HTTP, etc.)
+- Connections between components are Go channels with a buffer size of 100
+- When a source has multiple downstream targets, data is fanned out to all targets simultaneously
+- The pipeline executor monitors all goroutines and reports completion/failure status
+- Cancelling a pipeline instance cancels the shared context, which signals all goroutines to stop
+
+This means pipeline execution is real-time and row-by-row (not batch). The execution status endpoint reflects the live state of all component goroutines.
 
 ---
 
