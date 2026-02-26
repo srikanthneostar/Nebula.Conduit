@@ -1,0 +1,38 @@
+{
+  "name": "CSV Reader to Log Pipeline",
+  "description": "Reads employee data from a CSV file and writes each row to a log file",
+  "execution_mode": "scheduled",
+  "cron_expression": "*/5 * * * *",
+  "status": "inactive",
+  "components": [
+    {
+      "id": "csv-reader-1",
+      "type": "csv_reader",
+      "parameters": {
+        "file_path": "/Users/srikanthjonnalagedda/Nebula.Conduit/docs/sample_data.csv"
+      },
+      "retry_count": 2,
+      "retry_delay": 5000000000,
+      "continue_on_error": false,
+      "timeout": 30000000000
+    },
+    {
+      "id": "log-sink-1",
+      "type": "log_sink",
+      "parameters": {
+        "file_path": "/Users/srikanthjonnalagedda/Nebula.Conduit/logs/pipeline_output.log",
+        "log_level": "info",
+        "format": "json"
+      },
+      "retry_count": 0,
+      "continue_on_error": true,
+      "timeout": 10000000000
+    }
+  ],
+  "connections": [
+    {
+      "source_component_id": "csv-reader-1",
+      "target_component_id": "log-sink-1"
+    }
+  ]
+}

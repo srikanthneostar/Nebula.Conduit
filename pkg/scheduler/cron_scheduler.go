@@ -298,7 +298,9 @@ func (cs *CronScheduler) runSingleJob(ctx context.Context, jobExecution *JobExec
 			case "completed":
 				now := time.Now()
 				jobExecution.Status = StatusCompleted
-				jobExecution.Output = updatedTask.Output
+				if output, ok := updatedTask.Output.(string); ok {
+					jobExecution.Output = output
+				}
 				jobExecution.EndedAt = &now
 				jobExecution.ExitCode = updatedTask.ExitCode
 				return true
@@ -307,7 +309,9 @@ func (cs *CronScheduler) runSingleJob(ctx context.Context, jobExecution *JobExec
 				now := time.Now()
 				jobExecution.Status = StatusFailed
 				jobExecution.Error = updatedTask.Error
-				jobExecution.Output = updatedTask.Output
+				if output, ok := updatedTask.Output.(string); ok {
+					jobExecution.Output = output
+				}
 				jobExecution.EndedAt = &now
 				jobExecution.ExitCode = updatedTask.ExitCode
 				return false

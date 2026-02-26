@@ -23,6 +23,8 @@ import (
 	"github.com/Xecutables/Nebula.Conduit/internal/models"
 	"github.com/Xecutables/Nebula.Conduit/internal/task"
 	"github.com/Xecutables/Nebula.Conduit/pkg/executor"
+	"github.com/Xecutables/Nebula.Conduit/pkg/pipeline"
+	"github.com/Xecutables/Nebula.Conduit/pkg/pipeline/components"
 	"github.com/Xecutables/Nebula.Conduit/pkg/security"
 )
 
@@ -222,6 +224,19 @@ func NewServer(db *sql.DB, cfg *config.Config) *Server {
 		r.Get("/tasks/{id}", s.handleGetTask)
 		r.Post("/tasks/{id}/stop", s.handleStopTask)
 		r.Get("/tasks", s.handleListTasks)
+
+		// Pipeline engine routes
+		pipelineFactory := pipeline.NewComponentFactory()
+		components.RegisterComponents(pipelineFactory)
+		pipelineRepo := pipeline.NewSQLPipelineRepository(db)
+		pipelineMetrics := pipeline.NewDefaultMetricsCollector()
+		pipelineConfig := pipeline.PipelineEngineConfig{
+			MaxConcurrentInstances:    10,
+			MaxGoroutinesPerInstance:  50,
+			ExecutionHistoryRetention: 30,
+		}
+		pipelineEngine := pipeline.NewPipelineEngine(db, pipelineRepo, pipelineFactory, nil, &log.Logger, pipelineMetrics, pipelineConfig)
+		pipeline.RegisterRoutes(r, pipelineEngine)
 	})
 
 	return s

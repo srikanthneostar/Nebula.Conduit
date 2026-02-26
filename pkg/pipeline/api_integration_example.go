@@ -8,16 +8,41 @@ Example integration in internal/api/server.go:
 
 import (
 	"github.com/Xecutables/Nebula.Conduit/pkg/pipeline"
+	"github.com/Xecutables/Nebula.Conduit/pkg/pipeline/components"
 )
 
 func NewServer(db *sql.DB, cfg *config.Config) *Server {
 	// ... existing server setup ...
 
-	// Initialize pipeline engine (when implemented)
-	// pipelineEngine := pipeline.NewPipelineEngine(db, cfg)
+	// Create component factory and register all components
+	factory := pipeline.NewComponentFactory()
+	components.RegisterComponents(factory)
 
-	// Register pipeline routes (when engine is ready)
-	// pipeline.RegisterRoutes(s.Router, pipelineEngine)
+	// Create pipeline repository
+	repo := pipeline.NewSQLPipelineRepository(db)
+
+	// Create logger
+	logger := logger.InitLogger()
+
+	// Create metrics collector
+	metrics := pipeline.NewDefaultMetricsCollector()
+
+	// Configure pipeline engine
+	engineConfig := pipeline.PipelineEngineConfig{
+		MaxConcurrentInstances:    10,
+		MaxGoroutinesPerInstance:  50,
+		ExecutionHistoryRetention: 30, // days
+		MetricsEnabled:            true,
+	}
+
+	// Initialize pipeline engine
+	engine := pipeline.NewPipelineEngine(db, repo, factory, nil, &logger, metrics, engineConfig)
+
+	// Register pipeline routes
+	pipeline.RegisterRoutes(s.Router, engine)
+
+	// Initialize engine (loads active pipelines)
+	engine.Initialize(context.Background())
 
 	return s
 }

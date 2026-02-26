@@ -1,0 +1,303 @@
+{
+  "info": {
+    "name": "Nebula Conduit - Pipeline API",
+    "description": "API collection for testing the Nebula Conduit Data Pipeline Engine.\n\nBase URL: https://localhost:8080\n\nNOTE: Pipeline routes must be wired into the server first. See docs/pipeline_api_setup.md for instructions.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://localhost:8080",
+      "type": "string"
+    },
+    {
+      "key": "pipeline_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "instance_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "execution_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "auth_token",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.token) {",
+                  "    pm.collectionVariables.set('auth_token', jsonData.token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"admin\",\n  \"password\": \"admin123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/login",
+              "host": ["{{base_url}}"],
+              "path": ["login"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Pipeline CRUD",
+      "item": [
+        {
+          "name": "1. Create Pipeline (CSV to Log)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.id) {",
+                  "    pm.collectionVariables.set('pipeline_id', jsonData.id);",
+                  "    console.log('Pipeline ID saved: ' + jsonData.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"CSV Reader to Log Pipeline\",\n  \"description\": \"Reads employee data from a CSV file and writes each row to a log file\",\n  \"execution_mode\": \"scheduled\",\n  \"cron_expression\": \"*/5 * * * *\",\n  \"status\": \"inactive\",\n  \"components\": [\n    {\n      \"id\": \"csv-reader-1\",\n      \"type\": \"csv_reader\",\n      \"parameters\": {\n        \"file_path\": \"/Users/srikanthjonnalagedda/Nebula.Conduit/docs/sample_data.csv\"\n      },\n      \"retry_count\": 2,\n      \"retry_delay\": 5000000000,\n      \"continue_on_error\": false,\n      \"timeout\": 30000000000\n    },\n    {\n      \"id\": \"log-sink-1\",\n      \"type\": \"log_sink\",\n      \"parameters\": {\n        \"file_path\": \"/Users/srikanthjonnalagedda/Nebula.Conduit/logs/pipeline_output.log\",\n        \"log_level\": \"info\",\n        \"format\": \"json\"\n      },\n      \"retry_count\": 0,\n      \"continue_on_error\": true,\n      \"timeout\": 10000000000\n    }\n  ],\n  \"connections\": [\n    {\n      \"source_component_id\": \"csv-reader-1\",\n      \"target_component_id\": \"log-sink-1\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/pipelines",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "pipelines"]
+            }
+          }
+        },
+        {
+          "name": "2. Get Pipeline",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/pipelines/{{pipeline_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "pipelines", "{{pipeline_id}}"]
+            }
+          }
+        },
+        {
+          "name": "3. List All Pipelines",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/pipelines",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "pipelines"]
+            }
+          }
+        },
+        {
+          "name": "4. List Active Pipelines",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/pipelines?status=active",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "pipelines"],
+              "query": [
+                { "key": "status", "value": "active" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "5. Update Pipeline",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Updated: Reads CSV and logs data with info level\",\n  \"status\": \"active\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/pipelines/{{pipeline_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "pipelines", "{{pipeline_id}}"]
+            }
+          }
+        },
+        {
+          "name": "6. Delete Pipeline",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/pipelines/{{pipeline_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "pipelines", "{{pipeline_id}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Execution Control",
+      "item": [
+        {
+          "name": "1. Trigger Pipeline",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.instance_id) {",
+                  "    pm.collectionVariables.set('instance_id', jsonData.instance_id);",
+                  "    console.log('Instance ID saved: ' + jsonData.instance_id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/pipelines/{{pipeline_id}}/trigger",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "pipelines", "{{pipeline_id}}", "trigger"]
+            }
+          }
+        },
+        {
+          "name": "2. Get Instance Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/pipelines/instances/{{instance_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "pipelines", "instances", "{{instance_id}}"]
+            }
+          }
+        },
+        {
+          "name": "3. List Running Instances",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/pipelines/instances",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "pipelines", "instances"]
+            }
+          }
+        },
+        {
+          "name": "4. Stop Instance",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/pipelines/instances/{{instance_id}}/stop",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "pipelines", "instances", "{{instance_id}}", "stop"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Execution History",
+      "item": [
+        {
+          "name": "1. Get Execution History",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/pipelines/{{pipeline_id}}/executions?page=1&page_size=10",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "pipelines", "{{pipeline_id}}", "executions"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "page_size", "value": "10" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "2. Get Execution Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/pipelines/executions/{{execution_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "pipelines", "executions", "{{execution_id}}"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

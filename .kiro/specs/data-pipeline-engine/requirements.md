@@ -230,3 +230,20 @@ The Data Pipeline Engine is a new module for building and executing data pipelin
 5. WHEN a Pipeline_Instance is stopped, THE Pipeline_Engine SHALL signal all component goroutines to terminate
 6. THE Pipeline_Engine SHALL use context.Context for cancellation propagation across goroutines
 7. WHEN a component goroutine panics, THE Pipeline_Engine SHALL recover, log the panic, and mark the component as failed
+
+### Requirement 13: Component Development Framework
+
+**User Story:** As a developer, I want a framework that makes it easy to create new pipeline components (like CSV, HTTP, etc.) so that I can build custom sources, processors, and sinks without dealing with boilerplate or engine internals.
+
+#### Acceptance Criteria
+
+1. THE Pipeline_Engine SHALL provide a `BaseSource`, `BaseProcessor`, and `BaseSink` embeddable struct that handles all boilerplate (ID, Type, Config, channel setup, goroutine lifecycle, context cancellation) so that a developer only needs to implement the actual business logic
+2. THE `BaseSource` SHALL require the developer to implement only a single `Generate(ctx context.Context, emit func(Data) error) error` method that produces data
+3. THE `BaseProcessor` SHALL require the developer to implement only a single `Transform(ctx context.Context, input Data) (Data, error)` method that transforms one data item at a time
+4. THE `BaseSink` SHALL require the developer to implement only a single `Consume(ctx context.Context, input Data) error` method that consumes one data item at a time
+5. THE Pipeline_Engine SHALL provide a global `DefaultRegistry` and a `Register(name, constructor)` function at package level so that components can self-register via Go `init()` functions without modifying any existing files
+6. THE Pipeline_Engine SHALL provide `ParamString`, `ParamInt`, `ParamFloat`, `ParamBool`, `ParamStringSlice`, `ParamMap` helper functions that extract and type-assert parameters from `ComponentConfig.Parameters` with defaults and clear error messages
+7. THE Pipeline_Engine SHALL provide `DataToJSON`, `DataFromJSON`, `DataToBytes`, `DataFromBytes`, `DataToString` helper functions for converting between `Data.Payload` and common Go types
+8. THE Pipeline_Engine SHALL provide a `ComponentTestHarness` that lets developers test a component in isolation by feeding it mock input data and collecting output data, without needing to set up a full pipeline
+9. WHEN a component self-registers via `init()`, THE Pipeline_Engine SHALL make it available to the factory automatically when the package is imported (blank import pattern)
+10. THE Pipeline_Engine SHALL include a documented example of building a custom component from scratch using the framework, demonstrating the minimal code required

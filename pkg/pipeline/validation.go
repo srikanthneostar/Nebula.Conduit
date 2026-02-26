@@ -114,6 +114,8 @@ func ValidateComponentConfig(config ComponentConfig) error {
 		return validatePythonCodeBlockConfig(config)
 	case ComponentTypeLog:
 		return validateLogConfig(config)
+	case ComponentTypeLogSink:
+		return validateLogSinkConfig(config)
 	default:
 		return fmt.Errorf("unknown component type: %s", config.Type)
 	}
@@ -623,6 +625,46 @@ func validatePort(portParam interface{}) error {
 
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("port must be between 1 and 65535, got: %d", port)
+	}
+
+	return nil
+}
+
+// validateLogSinkConfig validates Log Sink component configuration
+func validateLogSinkConfig(config ComponentConfig) error {
+	filePathParam, ok := config.Parameters["file_path"]
+	if !ok {
+		return fmt.Errorf("Log_Sink_Component requires 'file_path' parameter")
+	}
+
+	filePath, ok := filePathParam.(string)
+	if !ok {
+		return fmt.Errorf("Log_Sink_Component 'file_path' must be a string")
+	}
+
+	if filePath == "" {
+		return fmt.Errorf("Log_Sink_Component 'file_path' cannot be empty")
+	}
+
+	logLevelParam, ok := config.Parameters["log_level"]
+	if !ok {
+		return fmt.Errorf("Log_Sink_Component requires 'log_level' parameter")
+	}
+
+	logLevel, ok := logLevelParam.(string)
+	if !ok {
+		return fmt.Errorf("Log_Sink_Component 'log_level' must be a string")
+	}
+
+	validLevels := map[string]bool{
+		"debug": true,
+		"info":  true,
+		"warn":  true,
+		"error": true,
+	}
+
+	if !validLevels[logLevel] {
+		return fmt.Errorf("Log_Sink_Component 'log_level' must be one of: debug, info, warn, error; got: %s", logLevel)
 	}
 
 	return nil

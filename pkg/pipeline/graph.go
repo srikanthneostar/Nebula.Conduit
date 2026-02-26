@@ -186,7 +186,8 @@ func isSinkComponent(compType ComponentType) bool {
 	case ComponentTypeHTTPPost,
 		ComponentTypeKafkaProducer,
 		ComponentTypeRabbitMQProducer,
-		ComponentTypeTCPWrite:
+		ComponentTypeTCPWrite,
+		ComponentTypeLogSink:
 		return true
 	default:
 		return false

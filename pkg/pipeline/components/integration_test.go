@@ -14,10 +14,11 @@ func TestBasicComponentsIntegration(t *testing.T) {
 	factory := pipeline.NewComponentFactory()
 	RegisterComponents(factory)
 
-	// Verify all components are registered (8 total: HTTP GET, HTTP POST, Log, SQL Query, CSV Reader, Python Code Block, TCP Read, TCP Write)
+	// Verify all components are registered (14 total: HTTP GET, HTTP POST, Log, Log Sink, SQL Query, CSV Reader,
+	// Python Code Block, TCP Read, TCP Write, Kafka Consumer, Kafka Producer, RabbitMQ Consumer, RabbitMQ Producer, HL7 Reader)
 	types := factory.ListTypes()
-	if len(types) != 8 {
-		t.Fatalf("expected 8 component types, got %d", len(types))
+	if len(types) != 14 {
+		t.Fatalf("expected 14 component types, got %d", len(types))
 	}
 
 	// Test 1: Create HTTP GET component

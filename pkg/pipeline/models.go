@@ -54,6 +54,7 @@ const (
 	ComponentTypeKafkaProducer    ComponentType = "kafka_producer"
 	ComponentTypeRabbitMQProducer ComponentType = "rabbitmq_producer"
 	ComponentTypeTCPWrite         ComponentType = "tcp_write"
+	ComponentTypeLogSink          ComponentType = "log_sink"
 )
 
 // Data represents the payload passed between components

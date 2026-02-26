@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -10,124 +11,158 @@ import (
 
 // ExecutionRecorder records pipeline and component execution details
 type ExecutionRecorder interface {
-	// StartExecution records the start of a pipeline execution
 	StartExecution(ctx context.Context, pipelineID string) (string, error)
-
-	// EndExecution records the end of a pipeline execution
 	EndExecution(ctx context.Context, executionID string, status InstanceStatus, err error) error
-
-	// StartComponent records the start of a component execution
 	StartComponent(ctx context.Context, executionID, componentID string) (string, error)
-
-	// EndComponent records the end of a component execution
 	EndComponent(ctx context.Context, componentExecID string, status InstanceStatus, outputSize int64, err error) error
-
-	// GetExecutionHistory retrieves execution history for a pipeline
-	GetExecutionHistory(ctx context.Context, pipelineID string, limit, offset int) ([]ExecutionRecord, error)
-
-	// GetExecutionDetails retrieves details of a specific execution
+	GetExecutionHistory(ctx context.Context, pipelineID string, limit, offset int) ([]ExecutionRecord, int, error)
 	GetExecutionDetails(ctx context.Context, executionID string) (*ExecutionRecord, error)
+	DeleteOldExecutions(ctx context.Context, retentionDays int) (int64, error)
 }
 
-// defaultExecutionRecorder implements ExecutionRecorder using the repository
+// defaultExecutionRecorder implements ExecutionRecorder using the database
 type defaultExecutionRecorder struct {
-	repository PipelineRepository
+	db *sql.DB
 }
 
 // NewExecutionRecorder creates a new execution recorder
-func NewExecutionRecorder(repository PipelineRepository) ExecutionRecorder {
-	return &defaultExecutionRecorder{
-		repository: repository,
-	}
+func NewExecutionRecorder(db *sql.DB) ExecutionRecorder {
+	return &defaultExecutionRecorder{db: db}
 }
 
-// StartExecution records the start of a pipeline execution
 func (r *defaultExecutionRecorder) StartExecution(ctx context.Context, pipelineID string) (string, error) {
 	executionID := uuid.New().String()
-
-	// TODO: Insert into pipeline_executions table
-	// For now, just return the ID
-	// In production, this would insert:
-	// INSERT INTO pipeline_executions (id, pipeline_id, status, started_at)
-	// VALUES (?, ?, 'running', CURRENT_TIMESTAMP)
-
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO pipeline_executions (id, pipeline_id, status, started_at) VALUES (?, ?, ?, ?)`,
+		executionID, pipelineID, InstanceStatusRunning, time.Now(),
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to record execution start: %w", err)
+	}
 	return executionID, nil
 }
 
-// EndExecution records the end of a pipeline execution
-func (r *defaultExecutionRecorder) EndExecution(ctx context.Context, executionID string, status InstanceStatus, err error) error {
-	// TODO: Update pipeline_executions table
-	// For now, just log
-	// In production, this would update:
-	// UPDATE pipeline_executions
-	// SET status = ?, ended_at = CURRENT_TIMESTAMP, error_message = ?
-	// WHERE id = ?
-
+func (r *defaultExecutionRecorder) EndExecution(ctx context.Context, executionID string, status InstanceStatus, execErr error) error {
 	var errMsg *string
-	if err != nil {
-		msg := err.Error()
+	if execErr != nil {
+		msg := execErr.Error()
 		errMsg = &msg
 	}
-
-	fmt.Printf("Execution %s ended with status %s, error: %v\n", executionID, status, errMsg)
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE pipeline_executions SET status = ?, ended_at = ?, error_message = ? WHERE id = ?`,
+		status, time.Now(), errMsg, executionID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to record execution end: %w", err)
+	}
 	return nil
 }
 
-// StartComponent records the start of a component execution
 func (r *defaultExecutionRecorder) StartComponent(ctx context.Context, executionID, componentID string) (string, error) {
 	componentExecID := uuid.New().String()
-
-	// TODO: Insert into component_executions table
-	// For now, just return the ID
-	// In production, this would insert:
-	// INSERT INTO component_executions (id, pipeline_execution_id, component_id, status, started_at)
-	// VALUES (?, ?, ?, 'running', CURRENT_TIMESTAMP)
-
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO component_executions (id, pipeline_execution_id, component_id, status, started_at) VALUES (?, ?, ?, ?, ?)`,
+		componentExecID, executionID, componentID, InstanceStatusRunning, time.Now(),
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to record component start: %w", err)
+	}
 	return componentExecID, nil
 }
 
-// EndComponent records the end of a component execution
-func (r *defaultExecutionRecorder) EndComponent(ctx context.Context, componentExecID string, status InstanceStatus, outputSize int64, err error) error {
-	// TODO: Update component_executions table
-	// For now, just log
-	// In production, this would update:
-	// UPDATE component_executions
-	// SET status = ?, ended_at = CURRENT_TIMESTAMP, output_data_size = ?, error_message = ?
-	// WHERE id = ?
-
+func (r *defaultExecutionRecorder) EndComponent(ctx context.Context, componentExecID string, status InstanceStatus, outputSize int64, execErr error) error {
 	var errMsg *string
-	if err != nil {
-		msg := err.Error()
+	if execErr != nil {
+		msg := execErr.Error()
 		errMsg = &msg
 	}
-
-	fmt.Printf("Component execution %s ended with status %s, output size: %d, error: %v\n",
-		componentExecID, status, outputSize, errMsg)
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE component_executions SET status = ?, ended_at = ?, output_data_size = ?, error_message = ? WHERE id = ?`,
+		status, time.Now(), outputSize, errMsg, componentExecID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to record component end: %w", err)
+	}
 	return nil
 }
 
-// GetExecutionHistory retrieves execution history for a pipeline
-func (r *defaultExecutionRecorder) GetExecutionHistory(ctx context.Context, pipelineID string, limit, offset int) ([]ExecutionRecord, error) {
-	// TODO: Query pipeline_executions table with JOIN to component_executions
-	// For now, return empty list
-	// In production, this would query:
-	// SELECT * FROM pipeline_executions
-	// WHERE pipeline_id = ?
-	// ORDER BY started_at DESC
-	// LIMIT ? OFFSET ?
+func (r *defaultExecutionRecorder) GetExecutionHistory(ctx context.Context, pipelineID string, limit, offset int) ([]ExecutionRecord, int, error) {
+	// Get total count
+	var total int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pipeline_executions WHERE pipeline_id = ?`, pipelineID,
+	).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to count executions: %w", err)
+	}
 
-	return []ExecutionRecord{}, nil
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, pipeline_id, status, started_at, ended_at, error_message
+		 FROM pipeline_executions WHERE pipeline_id = ?
+		 ORDER BY started_at DESC LIMIT ? OFFSET ?`,
+		pipelineID, limit, offset,
+	)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query execution history: %w", err)
+	}
+	defer rows.Close()
+
+	var records []ExecutionRecord
+	for rows.Next() {
+		var rec ExecutionRecord
+		if err := rows.Scan(&rec.ID, &rec.PipelineID, &rec.Status, &rec.StartedAt, &rec.EndedAt, &rec.ErrorMessage); err != nil {
+			return nil, 0, fmt.Errorf("failed to scan execution record: %w", err)
+		}
+		records = append(records, rec)
+	}
+	return records, total, nil
 }
 
-// GetExecutionDetails retrieves details of a specific execution
 func (r *defaultExecutionRecorder) GetExecutionDetails(ctx context.Context, executionID string) (*ExecutionRecord, error) {
-	// TODO: Query pipeline_executions and component_executions tables
-	// For now, return nil
-	// In production, this would query:
-	// SELECT * FROM pipeline_executions WHERE id = ?
-	// And JOIN with component_executions
+	var rec ExecutionRecord
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, pipeline_id, status, started_at, ended_at, error_message
+		 FROM pipeline_executions WHERE id = ?`, executionID,
+	).Scan(&rec.ID, &rec.PipelineID, &rec.Status, &rec.StartedAt, &rec.EndedAt, &rec.ErrorMessage)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("execution %s not found", executionID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query execution: %w", err)
+	}
 
-	return nil, fmt.Errorf("execution %s not found", executionID)
+	// Load component execution records
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, pipeline_execution_id, component_id, status, started_at, ended_at, output_data_size, error_message
+		 FROM component_executions WHERE pipeline_execution_id = ?
+		 ORDER BY started_at`, executionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query component executions: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var compRec ComponentExecutionRecord
+		if err := rows.Scan(&compRec.ID, &compRec.PipelineExecutionID, &compRec.ComponentID,
+			&compRec.Status, &compRec.StartedAt, &compRec.EndedAt, &compRec.OutputDataSize, &compRec.ErrorMessage); err != nil {
+			return nil, fmt.Errorf("failed to scan component execution: %w", err)
+		}
+		rec.ComponentResults = append(rec.ComponentResults, compRec)
+	}
+
+	return &rec, nil
+}
+
+func (r *defaultExecutionRecorder) DeleteOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
+	cutoff := time.Now().AddDate(0, 0, -retentionDays)
+	result, err := r.db.ExecContext(ctx,
+		`DELETE FROM pipeline_executions WHERE ended_at IS NOT NULL AND ended_at < ?`, cutoff,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete old executions: %w", err)
+	}
+	return result.RowsAffected()
 }
 
 // ComponentExecutionTracker tracks component execution metrics
@@ -140,7 +175,6 @@ type ComponentExecutionTracker struct {
 	outputDataSize  int64
 }
 
-// NewComponentExecutionTracker creates a new component execution tracker
 func NewComponentExecutionTracker(recorder ExecutionRecorder, executionID, componentID string) *ComponentExecutionTracker {
 	return &ComponentExecutionTracker{
 		executionID: executionID,
@@ -150,7 +184,6 @@ func NewComponentExecutionTracker(recorder ExecutionRecorder, executionID, compo
 	}
 }
 
-// Start records the start of component execution
 func (t *ComponentExecutionTracker) Start(ctx context.Context) error {
 	componentExecID, err := t.recorder.StartComponent(ctx, t.executionID, t.componentID)
 	if err != nil {
@@ -160,7 +193,6 @@ func (t *ComponentExecutionTracker) Start(ctx context.Context) error {
 	return nil
 }
 
-// End records the end of component execution
 func (t *ComponentExecutionTracker) End(ctx context.Context, status InstanceStatus, err error) error {
 	if t.componentExecID == "" {
 		return fmt.Errorf("component execution not started")
@@ -168,7 +200,6 @@ func (t *ComponentExecutionTracker) End(ctx context.Context, status InstanceStat
 	return t.recorder.EndComponent(ctx, t.componentExecID, status, t.outputDataSize, err)
 }
 
-// RecordOutputSize records the size of output data
 func (t *ComponentExecutionTracker) RecordOutputSize(size int64) {
 	t.outputDataSize += size
 }

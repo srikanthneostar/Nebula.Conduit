@@ -2,7 +2,9 @@ package pipeline
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/rs/zerolog"
 )
@@ -18,23 +20,17 @@ type PipelineEngine struct {
 	recorder         ExecutionRecorder
 	logger           *zerolog.Logger
 	metrics          MetricsCollector
+	config           PipelineEngineConfig
+	db               *sql.DB
+	cleanupCancel    context.CancelFunc
 }
 
 // MetricsCollector collects and exposes pipeline metrics
 type MetricsCollector interface {
-	// RecordExecution records a pipeline execution
 	RecordExecution(pipelineID string, duration float64, success bool)
-
-	// RecordComponentError records a component error
 	RecordComponentError(componentType ComponentType)
-
-	// SetActivePipelines sets the number of active pipelines
 	SetActivePipelines(count int)
-
-	// SetRunningInstances sets the number of running instances
 	SetRunningInstances(count int)
-
-	// IncrementTotalExecutions increments the total execution counter
 	IncrementTotalExecutions()
 }
 
@@ -49,6 +45,7 @@ type PipelineEngineConfig struct {
 
 // NewPipelineEngine creates a new pipeline engine instance
 func NewPipelineEngine(
+	db *sql.DB,
 	repository PipelineRepository,
 	componentFactory ComponentFactory,
 	backpressure BackpressureSystem,
@@ -56,22 +53,15 @@ func NewPipelineEngine(
 	metrics MetricsCollector,
 	config PipelineEngineConfig,
 ) *PipelineEngine {
-	// Create executor
+	recorder := NewExecutionRecorder(db)
 	executor := NewExecutor(componentFactory)
 
-	// Create recorder
-	recorder := NewExecutionRecorder(repository)
-
-	// Set recorder and backpressure on executor
 	if defaultExec, ok := executor.(*defaultExecutor); ok {
 		defaultExec.SetRecorder(recorder)
 		defaultExec.SetBackpressure(backpressure)
 	}
 
-	// Create scheduler
 	scheduler := NewScheduler(executor)
-
-	// Create lifecycle manager
 	lifecycleManager := NewLifecycleManager(repository, executor, scheduler)
 
 	return &PipelineEngine{
@@ -84,6 +74,8 @@ func NewPipelineEngine(
 		recorder:         recorder,
 		logger:           logger,
 		metrics:          metrics,
+		config:           config,
+		db:               db,
 	}
 }
 
@@ -91,10 +83,8 @@ func NewPipelineEngine(
 func (e *PipelineEngine) Initialize(ctx context.Context) error {
 	e.logger.Info().Msg("Initializing pipeline engine")
 
-	// Start the scheduler
 	e.scheduler.Start()
 
-	// Load active pipelines
 	activePipelines, err := e.repository.ListActive()
 	if err != nil {
 		return fmt.Errorf("failed to load active pipelines: %w", err)
@@ -102,18 +92,14 @@ func (e *PipelineEngine) Initialize(ctx context.Context) error {
 
 	e.logger.Info().Int("count", len(activePipelines)).Msg("Loading active pipelines")
 
-	// Start each active pipeline
 	for _, pipeline := range activePipelines {
 		if err := e.lifecycleManager.Start(pipeline.ID); err != nil {
-			e.logger.Error().
-				Err(err).
+			e.logger.Error().Err(err).
 				Str("pipeline_id", pipeline.ID).
 				Str("pipeline_name", pipeline.Name).
 				Msg("Failed to start pipeline")
-			// Continue with other pipelines
 			continue
 		}
-
 		e.logger.Info().
 			Str("pipeline_id", pipeline.ID).
 			Str("pipeline_name", pipeline.Name).
@@ -121,9 +107,15 @@ func (e *PipelineEngine) Initialize(ctx context.Context) error {
 			Msg("Started pipeline")
 	}
 
-	// Update metrics
 	if e.metrics != nil {
 		e.metrics.SetActivePipelines(len(activePipelines))
+	}
+
+	// Start execution history cleanup if retention is configured
+	if e.config.ExecutionHistoryRetention > 0 {
+		cleanupCtx, cancel := context.WithCancel(ctx)
+		e.cleanupCancel = cancel
+		go e.runCleanupLoop(cleanupCtx)
 	}
 
 	e.logger.Info().Msg("Pipeline engine initialized successfully")
@@ -134,23 +126,21 @@ func (e *PipelineEngine) Initialize(ctx context.Context) error {
 func (e *PipelineEngine) Shutdown(ctx context.Context) error {
 	e.logger.Info().Msg("Shutting down pipeline engine")
 
-	// Stop the scheduler
+	if e.cleanupCancel != nil {
+		e.cleanupCancel()
+	}
+
 	e.scheduler.Stop()
 
-	// Get all running instances
 	runningInstances := e.lifecycleManager.GetRunningInstances()
-
 	e.logger.Info().Int("count", len(runningInstances)).Msg("Stopping running pipeline instances")
 
-	// Stop all running instances
 	for _, instance := range runningInstances {
 		if err := e.executor.Stop(instance.ID); err != nil {
-			e.logger.Error().
-				Err(err).
+			e.logger.Error().Err(err).
 				Str("instance_id", instance.ID).
 				Str("pipeline_id", instance.PipelineID).
 				Msg("Failed to stop pipeline instance")
-			// Continue with other instances
 			continue
 		}
 	}
@@ -159,27 +149,29 @@ func (e *PipelineEngine) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// GetRepository returns the pipeline repository
-func (e *PipelineEngine) GetRepository() PipelineRepository {
-	return e.repository
+// runCleanupLoop periodically cleans up old execution records
+func (e *PipelineEngine) runCleanupLoop(ctx context.Context) {
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			deleted, err := e.recorder.DeleteOldExecutions(ctx, e.config.ExecutionHistoryRetention)
+			if err != nil {
+				e.logger.Error().Err(err).Msg("Failed to clean up old execution records")
+			} else if deleted > 0 {
+				e.logger.Info().Int64("deleted", deleted).Msg("Cleaned up old execution records")
+			}
+		}
+	}
 }
 
-// GetExecutor returns the executor
-func (e *PipelineEngine) GetExecutor() Executor {
-	return e.executor
-}
-
-// GetScheduler returns the scheduler
-func (e *PipelineEngine) GetScheduler() Scheduler {
-	return e.scheduler
-}
-
-// GetLifecycleManager returns the lifecycle manager
-func (e *PipelineEngine) GetLifecycleManager() LifecycleManager {
-	return e.lifecycleManager
-}
-
-// GetRecorder returns the execution recorder
-func (e *PipelineEngine) GetRecorder() ExecutionRecorder {
-	return e.recorder
-}
+func (e *PipelineEngine) GetRepository() PipelineRepository     { return e.repository }
+func (e *PipelineEngine) GetExecutor() Executor                 { return e.executor }
+func (e *PipelineEngine) GetScheduler() Scheduler               { return e.scheduler }
+func (e *PipelineEngine) GetLifecycleManager() LifecycleManager { return e.lifecycleManager }
+func (e *PipelineEngine) GetRecorder() ExecutionRecorder        { return e.recorder }
+func (e *PipelineEngine) GetConfig() PipelineEngineConfig       { return e.config }

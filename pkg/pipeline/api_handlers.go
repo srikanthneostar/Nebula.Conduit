@@ -1,11 +1,14 @@
 package pipeline
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
@@ -14,15 +17,11 @@ type PipelineHandlers struct {
 	engine *PipelineEngine
 }
 
-// NewPipelineHandlers creates a new instance of PipelineHandlers
 func NewPipelineHandlers(engine *PipelineEngine) *PipelineHandlers {
-	return &PipelineHandlers{
-		engine: engine,
-	}
+	return &PipelineHandlers{engine: engine}
 }
 
 // CreatePipeline handles POST /api/v1/pipelines
-// Creates a new pipeline definition
 func (h *PipelineHandlers) CreatePipeline(w http.ResponseWriter, r *http.Request) {
 	var req CreatePipelineRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -30,18 +29,34 @@ func (h *PipelineHandlers) CreatePipeline(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// TODO: Implement pipeline creation logic
-	// This will be implemented when PipelineEngine is complete
-	log.Info().
-		Str("name", req.Name).
-		Str("execution_mode", string(req.ExecutionMode)).
-		Msg("Create pipeline request received")
+	def := PipelineDefinition{
+		ID:             uuid.New().String(),
+		Name:           req.Name,
+		Description:    req.Description,
+		ExecutionMode:  req.ExecutionMode,
+		CronExpression: req.CronExpression,
+		Status:         req.Status,
+		Components:     req.Components,
+		Connections:    req.Connections,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
 
-	respondWithError(w, http.StatusNotImplemented, "Pipeline creation not yet implemented", "NOT_IMPLEMENTED", nil)
+	if def.Status == "" {
+		def.Status = PipelineStatusInactive
+	}
+
+	if err := h.engine.GetRepository().Create(def); err != nil {
+		log.Error().Err(err).Str("name", req.Name).Msg("Failed to create pipeline")
+		respondWithError(w, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR", nil)
+		return
+	}
+
+	log.Info().Str("pipeline_id", def.ID).Str("name", def.Name).Msg("Pipeline created")
+	respondWithJSON(w, http.StatusCreated, toPipelineResponse(def))
 }
 
 // GetPipeline handles GET /api/v1/pipelines/{id}
-// Retrieves a specific pipeline by ID
 func (h *PipelineHandlers) GetPipeline(w http.ResponseWriter, r *http.Request) {
 	pipelineID := chi.URLParam(r, "id")
 	if pipelineID == "" {
@@ -49,34 +64,67 @@ func (h *PipelineHandlers) GetPipeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement pipeline retrieval logic
-	log.Info().Str("pipeline_id", pipelineID).Msg("Get pipeline request received")
+	def, err := h.engine.GetRepository().Read(pipelineID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Pipeline not found", "NOT_FOUND", nil)
+		return
+	}
 
-	respondWithError(w, http.StatusNotImplemented, "Pipeline retrieval not yet implemented", "NOT_IMPLEMENTED", nil)
+	respondWithJSON(w, http.StatusOK, toPipelineResponse(def))
 }
 
 // ListPipelines handles GET /api/v1/pipelines
-// Lists all pipelines with optional filtering
 func (h *PipelineHandlers) ListPipelines(w http.ResponseWriter, r *http.Request) {
-	// Parse query parameters for filtering
 	status := r.URL.Query().Get("status")
-	executionMode := r.URL.Query().Get("execution_mode")
 
-	// TODO: Implement pipeline listing logic
-	log.Info().
-		Str("status", status).
-		Str("execution_mode", executionMode).
-		Msg("List pipelines request received")
+	var pipelines []PipelineDefinition
+	var err error
 
-	respondWithError(w, http.StatusNotImplemented, "Pipeline listing not yet implemented", "NOT_IMPLEMENTED", nil)
+	if status == string(PipelineStatusActive) {
+		pipelines, err = h.engine.GetRepository().ListActive()
+	} else {
+		pipelines, err = h.engine.GetRepository().List()
+	}
+
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to list pipelines")
+		respondWithError(w, http.StatusInternalServerError, "Failed to list pipelines", "INTERNAL_ERROR", nil)
+		return
+	}
+
+	// Filter by status if provided and not already filtered
+	if status != "" && status != string(PipelineStatusActive) {
+		var filtered []PipelineDefinition
+		for _, p := range pipelines {
+			if string(p.Status) == status {
+				filtered = append(filtered, p)
+			}
+		}
+		pipelines = filtered
+	}
+
+	var responses []PipelineResponse
+	for _, p := range pipelines {
+		responses = append(responses, toPipelineResponse(p))
+	}
+
+	respondWithJSON(w, http.StatusOK, ListPipelinesResponse{
+		Pipelines: responses,
+		Total:     len(responses),
+	})
 }
 
 // UpdatePipeline handles PUT /api/v1/pipelines/{id}
-// Updates an existing pipeline definition
 func (h *PipelineHandlers) UpdatePipeline(w http.ResponseWriter, r *http.Request) {
 	pipelineID := chi.URLParam(r, "id")
 	if pipelineID == "" {
 		respondWithError(w, http.StatusBadRequest, "Pipeline ID is required", "INVALID_REQUEST", nil)
+		return
+	}
+
+	existing, err := h.engine.GetRepository().Read(pipelineID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Pipeline not found", "NOT_FOUND", nil)
 		return
 	}
 
@@ -86,14 +134,40 @@ func (h *PipelineHandlers) UpdatePipeline(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// TODO: Implement pipeline update logic
-	log.Info().Str("pipeline_id", pipelineID).Msg("Update pipeline request received")
+	// Apply partial updates
+	if req.Name != nil {
+		existing.Name = *req.Name
+	}
+	if req.Description != nil {
+		existing.Description = *req.Description
+	}
+	if req.ExecutionMode != nil {
+		existing.ExecutionMode = *req.ExecutionMode
+	}
+	if req.CronExpression != nil {
+		existing.CronExpression = *req.CronExpression
+	}
+	if req.Status != nil {
+		existing.Status = *req.Status
+	}
+	if req.Components != nil {
+		existing.Components = *req.Components
+	}
+	if req.Connections != nil {
+		existing.Connections = *req.Connections
+	}
 
-	respondWithError(w, http.StatusNotImplemented, "Pipeline update not yet implemented", "NOT_IMPLEMENTED", nil)
+	if err := h.engine.GetRepository().Update(existing); err != nil {
+		log.Error().Err(err).Str("pipeline_id", pipelineID).Msg("Failed to update pipeline")
+		respondWithError(w, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR", nil)
+		return
+	}
+
+	log.Info().Str("pipeline_id", pipelineID).Msg("Pipeline updated")
+	respondWithJSON(w, http.StatusOK, toPipelineResponse(existing))
 }
 
 // DeletePipeline handles DELETE /api/v1/pipelines/{id}
-// Deletes a pipeline definition
 func (h *PipelineHandlers) DeletePipeline(w http.ResponseWriter, r *http.Request) {
 	pipelineID := chi.URLParam(r, "id")
 	if pipelineID == "" {
@@ -101,14 +175,19 @@ func (h *PipelineHandlers) DeletePipeline(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// TODO: Implement pipeline deletion logic
-	log.Info().Str("pipeline_id", pipelineID).Msg("Delete pipeline request received")
+	// Stop pipeline if running
+	_ = h.engine.GetLifecycleManager().Stop(pipelineID)
 
-	respondWithError(w, http.StatusNotImplemented, "Pipeline deletion not yet implemented", "NOT_IMPLEMENTED", nil)
+	if err := h.engine.GetRepository().Delete(pipelineID); err != nil {
+		respondWithError(w, http.StatusNotFound, "Pipeline not found", "NOT_FOUND", nil)
+		return
+	}
+
+	log.Info().Str("pipeline_id", pipelineID).Msg("Pipeline deleted")
+	respondWithJSON(w, http.StatusOK, MessageResponse{Message: "Pipeline deleted successfully"})
 }
 
 // TriggerPipeline handles POST /api/v1/pipelines/{id}/trigger
-// Manually triggers a pipeline execution
 func (h *PipelineHandlers) TriggerPipeline(w http.ResponseWriter, r *http.Request) {
 	pipelineID := chi.URLParam(r, "id")
 	if pipelineID == "" {
@@ -116,14 +195,29 @@ func (h *PipelineHandlers) TriggerPipeline(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// TODO: Implement pipeline trigger logic
-	log.Info().Str("pipeline_id", pipelineID).Msg("Trigger pipeline request received")
+	def, err := h.engine.GetRepository().Read(pipelineID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Pipeline not found", "NOT_FOUND", nil)
+		return
+	}
 
-	respondWithError(w, http.StatusNotImplemented, "Pipeline trigger not yet implemented", "NOT_IMPLEMENTED", nil)
+	instance, err := h.engine.GetExecutor().Execute(context.Background(), def)
+	if err != nil {
+		log.Error().Err(err).Str("pipeline_id", pipelineID).Msg("Failed to trigger pipeline")
+		respondWithError(w, http.StatusInternalServerError, err.Error(), "EXECUTION_ERROR", nil)
+		return
+	}
+
+	log.Info().Str("pipeline_id", pipelineID).Str("instance_id", instance.ID).Msg("Pipeline triggered")
+	respondWithJSON(w, http.StatusOK, TriggerPipelineResponse{
+		InstanceID: instance.ID,
+		PipelineID: pipelineID,
+		Status:     string(instance.Status),
+		Message:    "Pipeline execution triggered successfully",
+	})
 }
 
 // StopPipelineInstance handles POST /api/v1/pipelines/instances/{id}/stop
-// Stops a running pipeline instance
 func (h *PipelineHandlers) StopPipelineInstance(w http.ResponseWriter, r *http.Request) {
 	instanceID := chi.URLParam(r, "id")
 	if instanceID == "" {
@@ -131,14 +225,20 @@ func (h *PipelineHandlers) StopPipelineInstance(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// TODO: Implement instance stop logic
-	log.Info().Str("instance_id", instanceID).Msg("Stop instance request received")
+	if err := h.engine.GetExecutor().Stop(instanceID); err != nil {
+		respondWithError(w, http.StatusNotFound, err.Error(), "NOT_FOUND", nil)
+		return
+	}
 
-	respondWithError(w, http.StatusNotImplemented, "Instance stop not yet implemented", "NOT_IMPLEMENTED", nil)
+	log.Info().Str("instance_id", instanceID).Msg("Pipeline instance stopped")
+	respondWithJSON(w, http.StatusOK, StopInstanceResponse{
+		InstanceID: instanceID,
+		Status:     string(InstanceStatusStopped),
+		Message:    "Pipeline instance stopped successfully",
+	})
 }
 
 // GetInstanceStatus handles GET /api/v1/pipelines/instances/{id}
-// Retrieves the status of a pipeline instance
 func (h *PipelineHandlers) GetInstanceStatus(w http.ResponseWriter, r *http.Request) {
 	instanceID := chi.URLParam(r, "id")
 	if instanceID == "" {
@@ -146,23 +246,42 @@ func (h *PipelineHandlers) GetInstanceStatus(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// TODO: Implement instance status retrieval logic
-	log.Info().Str("instance_id", instanceID).Msg("Get instance status request received")
+	status, err := h.engine.GetExecutor().GetStatus(instanceID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, err.Error(), "NOT_FOUND", nil)
+		return
+	}
 
-	respondWithError(w, http.StatusNotImplemented, "Instance status retrieval not yet implemented", "NOT_IMPLEMENTED", nil)
+	respondWithJSON(w, http.StatusOK, GetInstanceStatusResponse{
+		InstanceID: status.InstanceID,
+		PipelineID: status.PipelineID,
+		Status:     status.Status,
+		StartedAt:  status.StartedAt.Format(time.RFC3339),
+		Components: status.Components,
+	})
 }
 
 // ListRunningInstances handles GET /api/v1/pipelines/instances
-// Lists all currently running pipeline instances
 func (h *PipelineHandlers) ListRunningInstances(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement running instances listing logic
-	log.Info().Msg("List running instances request received")
+	instances := h.engine.GetLifecycleManager().GetRunningInstances()
 
-	respondWithError(w, http.StatusNotImplemented, "Running instances listing not yet implemented", "NOT_IMPLEMENTED", nil)
+	var responses []GetInstanceStatusResponse
+	for _, inst := range instances {
+		responses = append(responses, GetInstanceStatusResponse{
+			InstanceID: inst.ID,
+			PipelineID: inst.PipelineID,
+			Status:     inst.Status,
+			StartedAt:  inst.StartedAt.Format(time.RFC3339),
+		})
+	}
+
+	respondWithJSON(w, http.StatusOK, ListRunningInstancesResponse{
+		Instances: responses,
+		Total:     len(responses),
+	})
 }
 
 // GetExecutionHistory handles GET /api/v1/pipelines/{id}/executions
-// Retrieves execution history for a pipeline with pagination
 func (h *PipelineHandlers) GetExecutionHistory(w http.ResponseWriter, r *http.Request) {
 	pipelineID := chi.URLParam(r, "id")
 	if pipelineID == "" {
@@ -170,7 +289,6 @@ func (h *PipelineHandlers) GetExecutionHistory(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Parse pagination parameters
 	page := 1
 	pageSize := 20
 
@@ -179,25 +297,29 @@ func (h *PipelineHandlers) GetExecutionHistory(w http.ResponseWriter, r *http.Re
 			page = p
 		}
 	}
-
 	if pageSizeStr := r.URL.Query().Get("page_size"); pageSizeStr != "" {
 		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 && ps <= 100 {
 			pageSize = ps
 		}
 	}
 
-	// TODO: Implement execution history retrieval logic
-	log.Info().
-		Str("pipeline_id", pipelineID).
-		Int("page", page).
-		Int("page_size", pageSize).
-		Msg("Get execution history request received")
+	offset := (page - 1) * pageSize
+	records, total, err := h.engine.GetRecorder().GetExecutionHistory(r.Context(), pipelineID, pageSize, offset)
+	if err != nil {
+		log.Error().Err(err).Str("pipeline_id", pipelineID).Msg("Failed to get execution history")
+		respondWithError(w, http.StatusInternalServerError, "Failed to get execution history", "INTERNAL_ERROR", nil)
+		return
+	}
 
-	respondWithError(w, http.StatusNotImplemented, "Execution history retrieval not yet implemented", "NOT_IMPLEMENTED", nil)
+	respondWithJSON(w, http.StatusOK, GetExecutionHistoryResponse{
+		Executions: records,
+		Total:      total,
+		Page:       page,
+		PageSize:   pageSize,
+	})
 }
 
 // GetExecutionDetails handles GET /api/v1/pipelines/executions/{id}
-// Retrieves detailed information about a specific execution
 func (h *PipelineHandlers) GetExecutionDetails(w http.ResponseWriter, r *http.Request) {
 	executionID := chi.URLParam(r, "id")
 	if executionID == "" {
@@ -205,25 +327,25 @@ func (h *PipelineHandlers) GetExecutionDetails(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// TODO: Implement execution details retrieval logic
-	log.Info().Str("execution_id", executionID).Msg("Get execution details request received")
+	record, err := h.engine.GetRecorder().GetExecutionDetails(r.Context(), executionID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Execution not found", "NOT_FOUND", nil)
+		return
+	}
 
-	respondWithError(w, http.StatusNotImplemented, "Execution details retrieval not yet implemented", "NOT_IMPLEMENTED", nil)
+	respondWithJSON(w, http.StatusOK, GetExecutionDetailsResponse{ExecutionRecord: *record})
 }
 
-// Helper functions for response formatting
+// Helper functions
 
-// respondWithError sends an error response with structured format
 func respondWithError(w http.ResponseWriter, code int, message string, errorCode string, details map[string]interface{}) {
-	response := ErrorResponse{
+	respondWithJSON(w, code, ErrorResponse{
 		Error:   message,
 		Code:    errorCode,
 		Details: details,
-	}
-	respondWithJSON(w, code, response)
+	})
 }
 
-// respondWithJSON sends a JSON response
 func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 	response, err := json.Marshal(payload)
 	if err != nil {
@@ -231,8 +353,22 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	w.Write(response)
+}
+
+func toPipelineResponse(def PipelineDefinition) PipelineResponse {
+	return PipelineResponse{
+		ID:             def.ID,
+		Name:           def.Name,
+		Description:    def.Description,
+		ExecutionMode:  def.ExecutionMode,
+		CronExpression: def.CronExpression,
+		Status:         def.Status,
+		Components:     def.Components,
+		Connections:    def.Connections,
+		CreatedAt:      def.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:      def.UpdatedAt.Format(time.RFC3339),
+	}
 }

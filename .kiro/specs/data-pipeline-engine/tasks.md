@@ -2,7 +2,7 @@
 
 ## Overview
 
-This implementation plan breaks down the Data Pipeline Engine into 6 phases following the design architecture. The engine is a graph-based data processing system in Go that enables users to construct and execute data workflows with 13 component types, scheduled/continuous execution modes, and comprehensive error handling. Each task builds incrementally on previous work, with property-based tests using gopter to validate the 23 correctness properties from the design.
+This implementation plan breaks down the Data Pipeline Engine into 7 phases following the design architecture. The engine is a graph-based data processing system in Go that enables users to construct and execute data workflows with 13+ component types, scheduled/continuous execution modes, and comprehensive error handling. Each task builds incrementally on previous work, with property-based tests using gopter to validate the correctness properties from the design. Phase 7 adds a component development framework for extensibility.
 
 ## Tasks
 
@@ -125,7 +125,7 @@ This implementation plan breaks down the Data Pipeline Engine into 6 phases foll
     - **Property 10: Log Component Truncation**
     - **Validates: Requirements 2.30**
 
-  - [ ] 2.8 Register basic components in factory
+  - [x] 2.8 Register basic components in factory
     - Register HTTP GET, HTTP POST, and Log components
     - Add component type constants
     - Test component creation through factory
@@ -204,6 +204,7 @@ This implementation plan breaks down the Data Pipeline Engine into 6 phases foll
     - Record pipeline execution start, end, duration, status
     - Record component execution details in database
     - Store execution records in `pipeline_executions` and `component_executions` tables
+    - _Note: ExecutionRecorder now writes to SQLite via actual SQL queries_
     - _Requirements: 3.4, 6.6, 7.8_
 
   - [ ]* 3.13 Write property tests for execution recording
@@ -352,7 +353,7 @@ This implementation plan breaks down the Data Pipeline Engine into 6 phases foll
     - Test connection error handling
     - Test message serialization
 
-  - [-] 5.4 Implement RabbitMQ Consumer component
+  - [x] 5.4 Implement RabbitMQ Consumer component
     - Create `components/rabbitmq.go` with `RabbitMQConsumerComponent` struct
     - Implement source component interface methods
     - Support connection URL and queue name configuration
@@ -361,7 +362,7 @@ This implementation plan breaks down the Data Pipeline Engine into 6 phases foll
     - Support message acknowledgment
     - _Requirements: 2.7, 8.8_
 
-  - [ ] 5.5 Implement RabbitMQ Producer component
+  - [x] 5.5 Implement RabbitMQ Producer component
     - Add `RabbitMQProducerComponent` to `components/rabbitmq.go`
     - Implement sink component interface methods
     - Support connection URL and exchange name configuration
@@ -376,7 +377,7 @@ This implementation plan breaks down the Data Pipeline Engine into 6 phases foll
     - Test connection error handling
     - Test message acknowledgment
 
-  - [ ] 5.7 Implement HL7 Reader component
+  - [x] 5.7 Implement HL7 Reader component
     - Create `components/hl7.go` with `HL7ReaderComponent` struct
     - Implement source component interface methods
     - Support file path configuration
@@ -389,17 +390,18 @@ This implementation plan breaks down the Data Pipeline Engine into 6 phases foll
     - Test file not found error handling
     - Test malformed HL7 handling
 
-  - [ ] 5.9 Register messaging components in factory
-    - Register Kafka Consumer, Kafka Producer, RabbitMQ Consumer, RabbitMQ Producer, HL7 Reader components
+  - [x] 5.9 Register messaging components in factory
+    - Register Kafka Consumer, Kafka Producer, RabbitMQ Consumer, RabbitMQ Producer, HL7 Reader components in `components/register.go`
     - Add component type constants
     - Test component creation through factory
+    - _Note: All 13 component types are now registered_
     - _Requirements: 2.5, 2.6, 2.7, 2.8, 2.9_
 
   - [ ] 5.10 Checkpoint - Ensure all tests pass
     - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 6. Phase 6: API Implementation and Observability
-  - [ ] 6.1 Implement pipeline CRUD API handlers
+  - [x] 6.1 Implement pipeline CRUD API handlers
     - Implement `CreatePipeline` handler with validation
     - Implement `GetPipeline` handler
     - Implement `ListPipelines` handler with filtering
@@ -415,7 +417,7 @@ This implementation plan breaks down the Data Pipeline Engine into 6 phases foll
     - Test update pipeline
     - Test delete pipeline
 
-  - [ ] 6.3 Implement pipeline execution control API handlers
+  - [x] 6.3 Implement pipeline execution control API handlers
     - Implement `TriggerPipeline` handler for manual execution
     - Implement `StopPipelineInstance` handler
     - Implement `GetInstanceStatus` handler
@@ -428,7 +430,7 @@ This implementation plan breaks down the Data Pipeline Engine into 6 phases foll
     - Test get instance status
     - Test list running instances
 
-  - [ ] 6.5 Implement execution history API handlers
+  - [x] 6.5 Implement execution history API handlers
     - Implement `GetExecutionHistory` handler with pagination
     - Implement `GetExecutionDetails` handler
     - Return execution records with component results
@@ -439,7 +441,7 @@ This implementation plan breaks down the Data Pipeline Engine into 6 phases foll
     - Test get execution details
     - Test filtering by status and date range
 
-  - [ ] 6.7 Implement comprehensive logging
+  - [x] 6.7 Implement comprehensive logging
     - Log pipeline instance start with name, execution ID, start time
     - Log pipeline instance completion with name, execution ID, duration, status
     - Log component start with type, ID, input data size
@@ -454,7 +456,7 @@ This implementation plan breaks down the Data Pipeline Engine into 6 phases foll
     - Test error logging with context
     - Verify structured log format
 
-  - [ ] 6.9 Implement metrics collection
+  - [x] 6.9 Implement metrics collection
     - Create `metrics.go` with metrics collector
     - Track total pipelines, active pipelines, running instances, total executions
     - Track pipeline execution duration histogram
@@ -467,14 +469,14 @@ This implementation plan breaks down the Data Pipeline Engine into 6 phases foll
     - Test metrics exposed at /metrics endpoint
     - Test histogram recording for execution duration
 
-  - [ ] 6.11 Add configuration support
+  - [x] 6.11 Add configuration support
     - Add pipeline engine configuration to main application config
     - Support `enabled`, `max_concurrent_instances`, `max_goroutines_per_instance`, `execution_history_retention_days` settings
     - Implement configuration loading and validation
     - Support disabling pipeline engine via configuration
     - _Requirements: 11.7_
 
-  - [ ] 6.12 Implement execution history cleanup
+  - [x] 6.12 Implement execution history cleanup
     - Create background job to clean old execution records
     - Respect `execution_history_retention_days` configuration
     - Run cleanup periodically
@@ -491,6 +493,51 @@ This implementation plan breaks down the Data Pipeline Engine into 6 phases foll
 
   - [ ] 6.14 Final checkpoint - Ensure all tests pass
     - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 7. Phase 7: Component Development Framework
+  - [x] 7.1 Implement base component structs (BaseSource, BaseProcessor, BaseSink)
+    - Create `framework.go` with `BaseComponent`, `BaseSource`, `BaseProcessor`, `BaseSink`
+    - `BaseSource` requires only a `Generate(ctx, emit)` function
+    - `BaseProcessor` requires only a `Transform(ctx, input)` function
+    - `BaseSink` requires only a `Consume(ctx, input)` function
+    - All base structs handle channel setup, goroutine lifecycle, context cancellation
+    - _Requirements: 13.1, 13.2, 13.3, 13.4_
+
+  - [x] 7.2 Implement global registry with init() auto-registration
+    - Create `registry.go` with `DefaultRegistry` and `Registry` struct
+    - Support `Register(name, constructor)` at package level
+    - Provide `RegisterAll(factory)` to copy registry entries into a factory
+    - Enable blank-import auto-registration pattern
+    - _Requirements: 13.5, 13.8, 13.9_
+
+  - [x] 7.3 Implement parameter extraction helpers
+    - Create `helpers.go` with `ParamString`, `ParamStringRequired`, `ParamInt`, `ParamFloat`, `ParamBool`, `ParamStringSlice`, `ParamMap`, `ParamDuration`
+    - All helpers handle JSON type coercion (float64 → int, []interface{} → []string, etc.)
+    - All helpers return clear error messages on type mismatch
+    - _Requirements: 13.6_
+
+  - [x] 7.4 Implement data conversion helpers
+    - Add `DataToJSON`, `DataFromJSON`, `DataToBytes`, `DataFromBytes`, `DataToString`, `NewData` to `helpers.go`
+    - _Requirements: 13.7_
+
+  - [x] 7.5 Implement ComponentTestHarness
+    - Create `test_harness.go` with `ComponentTestHarness` struct
+    - Support `SendInput`, `CloseInput`, `Run`, `RunSource` methods
+    - Auto-detect component category (source/processor/sink)
+    - Configurable timeout via `WithTimeout`
+    - _Requirements: 13.8_
+
+  - [x] 7.6 Create documented example custom components
+    - Create `components/example_custom_component.go` with three examples:
+      - Example source (generates strings)
+      - Example processor (uppercase transform)
+      - Example sink (collector)
+    - Include comments explaining the framework patterns
+    - Show init() self-registration pattern
+    - _Requirements: 13.10_
+
+  - [x] 7.7 Checkpoint - Ensure all framework code compiles
+    - All files compile with zero diagnostics
 
 ## Notes
 
