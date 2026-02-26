@@ -116,6 +116,8 @@ func ValidateComponentConfig(config ComponentConfig) error {
 		return validateLogConfig(config)
 	case ComponentTypeLogSink:
 		return validateLogSinkConfig(config)
+	case ComponentTypeAttributeUpdate:
+		return validateAttributeUpdateConfig(config)
 	default:
 		return fmt.Errorf("unknown component type: %s", config.Type)
 	}
@@ -665,6 +667,40 @@ func validateLogSinkConfig(config ComponentConfig) error {
 
 	if !validLevels[logLevel] {
 		return fmt.Errorf("Log_Sink_Component 'log_level' must be one of: debug, info, warn, error; got: %s", logLevel)
+	}
+
+	return nil
+}
+
+// validateAttributeUpdateConfig validates Attribute Update component configuration
+func validateAttributeUpdateConfig(config ComponentConfig) error {
+	mappingsParam, ok := config.Parameters["mappings"]
+	if !ok {
+		return fmt.Errorf("Attribute_Update_Component requires 'mappings' parameter")
+	}
+
+	mappings, ok := mappingsParam.([]interface{})
+	if !ok {
+		return fmt.Errorf("Attribute_Update_Component 'mappings' must be an array")
+	}
+
+	if len(mappings) == 0 {
+		return fmt.Errorf("Attribute_Update_Component 'mappings' must have at least one entry")
+	}
+
+	for i, item := range mappings {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("Attribute_Update_Component mapping[%d] must be an object", i)
+		}
+		name, _ := m["name"].(string)
+		expression, _ := m["expression"].(string)
+		if name == "" {
+			return fmt.Errorf("Attribute_Update_Component mapping[%d] 'name' is required", i)
+		}
+		if expression == "" {
+			return fmt.Errorf("Attribute_Update_Component mapping[%d] 'expression' is required", i)
+		}
 	}
 
 	return nil

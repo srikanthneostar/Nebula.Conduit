@@ -48,6 +48,7 @@ const (
 	// Processor components
 	ComponentTypePythonCodeBlock ComponentType = "python_code_block"
 	ComponentTypeLog             ComponentType = "log"
+	ComponentTypeAttributeUpdate ComponentType = "attribute_update"
 
 	// Sink components
 	ComponentTypeHTTPPost         ComponentType = "http_post"
