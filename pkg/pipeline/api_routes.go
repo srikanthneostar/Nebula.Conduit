@@ -19,6 +19,10 @@ func RegisterRoutes(r chi.Router, engine *PipelineEngine) {
 		r.Delete("/{id}", handlers.DeletePipeline)        // Delete pipeline
 		r.Post("/{id}/trigger", handlers.TriggerPipeline) // Manually trigger pipeline
 
+		// Import/Export endpoints
+		r.Get("/export", handlers.ExportPipelines)  // Export pipelines as portable JSON
+		r.Post("/import", handlers.ImportPipelines) // Import pipelines from portable JSON
+
 		// Execution history endpoints
 		r.Get("/{id}/executions", handlers.GetExecutionHistory) // Get execution history for pipeline
 		r.Get("/executions/{id}", handlers.GetExecutionDetails) // Get specific execution details

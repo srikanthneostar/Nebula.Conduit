@@ -3,8 +3,10 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -371,4 +373,147 @@ func toPipelineResponse(def PipelineDefinition) PipelineResponse {
 		CreatedAt:      def.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:      def.UpdatedAt.Format(time.RFC3339),
 	}
+}
+
+// ExportPipelines handles GET /api/v1/pipelines/export
+// Exports all pipelines (or filtered by ?ids=id1,id2) in a portable JSON format.
+func (h *PipelineHandlers) ExportPipelines(w http.ResponseWriter, r *http.Request) {
+	pipelines, err := h.engine.GetRepository().List()
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to list pipelines for export")
+		respondWithError(w, http.StatusInternalServerError, "Failed to export pipelines", "INTERNAL_ERROR", nil)
+		return
+	}
+
+	// Optional: filter by comma-separated IDs
+	idsParam := r.URL.Query().Get("ids")
+	if idsParam != "" {
+		idSet := make(map[string]bool)
+		for _, id := range splitAndTrim(idsParam) {
+			idSet[id] = true
+		}
+		var filtered []PipelineDefinition
+		for _, p := range pipelines {
+			if idSet[p.ID] {
+				filtered = append(filtered, p)
+			}
+		}
+		pipelines = filtered
+	}
+
+	exported := make([]ExportedPipeline, 0, len(pipelines))
+	for _, p := range pipelines {
+		exported = append(exported, ExportedPipeline{
+			Name:           p.Name,
+			Description:    p.Description,
+			ExecutionMode:  p.ExecutionMode,
+			CronExpression: p.CronExpression,
+			Status:         p.Status,
+			Components:     p.Components,
+			Connections:    p.Connections,
+		})
+	}
+
+	resp := ExportPipelinesResponse{
+		Version:    "1.0",
+		ExportedAt: time.Now().Format(time.RFC3339),
+		Pipelines:  exported,
+		Total:      len(exported),
+	}
+
+	log.Info().Int("count", len(exported)).Msg("Pipelines exported")
+	respondWithJSON(w, http.StatusOK, resp)
+}
+
+// ImportPipelines handles POST /api/v1/pipelines/import
+// Imports pipelines from the portable JSON format.
+// If overwrite_by_name is true, existing pipelines with the same name are updated.
+func (h *PipelineHandlers) ImportPipelines(w http.ResponseWriter, r *http.Request) {
+	var req ImportPipelinesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid request payload", "INVALID_REQUEST", nil)
+		return
+	}
+
+	if len(req.Pipelines) == 0 {
+		respondWithError(w, http.StatusBadRequest, "No pipelines to import", "INVALID_REQUEST", nil)
+		return
+	}
+
+	// Build name→ID lookup for overwrite mode
+	var nameToID map[string]string
+	if req.OverwriteByName {
+		existing, err := h.engine.GetRepository().List()
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "Failed to list existing pipelines", "INTERNAL_ERROR", nil)
+			return
+		}
+		nameToID = make(map[string]string, len(existing))
+		for _, p := range existing {
+			nameToID[p.Name] = p.ID
+		}
+	}
+
+	imported, skipped, overwritten := 0, 0, 0
+	var errors []string
+
+	for i, ep := range req.Pipelines {
+		def := PipelineDefinition{
+			Name:           ep.Name,
+			Description:    ep.Description,
+			ExecutionMode:  ep.ExecutionMode,
+			CronExpression: ep.CronExpression,
+			Status:         ep.Status,
+			Components:     ep.Components,
+			Connections:    ep.Connections,
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
+		}
+
+		// Check for overwrite
+		if req.OverwriteByName {
+			if existingID, exists := nameToID[ep.Name]; exists {
+				def.ID = existingID
+				if err := h.engine.GetRepository().Update(def); err != nil {
+					errors = append(errors, fmt.Sprintf("pipeline[%d] %q: overwrite failed: %s", i, ep.Name, err.Error()))
+					skipped++
+				} else {
+					overwritten++
+				}
+				continue
+			}
+		}
+
+		// Create new
+		def.ID = uuid.New().String()
+		if err := h.engine.GetRepository().Create(def); err != nil {
+			errors = append(errors, fmt.Sprintf("pipeline[%d] %q: %s", i, ep.Name, err.Error()))
+			skipped++
+		} else {
+			imported++
+		}
+	}
+
+	msg := fmt.Sprintf("Import complete: %d imported, %d overwritten, %d skipped", imported, overwritten, skipped)
+	log.Info().Int("imported", imported).Int("overwritten", overwritten).Int("skipped", skipped).Msg("Pipelines imported")
+
+	respondWithJSON(w, http.StatusOK, ImportPipelinesResponse{
+		Imported:    imported,
+		Skipped:     skipped,
+		Overwritten: overwritten,
+		Errors:      errors,
+		Message:     msg,
+	})
+}
+
+// splitAndTrim splits a comma-separated string and trims whitespace
+func splitAndTrim(s string) []string {
+	parts := make([]string, 0)
+	for _, p := range strings.Split(s, ",") {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			parts = append(parts, trimmed)
+		}
+	}
+	return parts
 }

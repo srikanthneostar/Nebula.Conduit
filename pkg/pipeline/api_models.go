@@ -108,3 +108,37 @@ type ErrorResponse struct {
 type MessageResponse struct {
 	Message string `json:"message"`
 }
+
+// ExportPipelinesResponse represents the export format for pipelines
+type ExportPipelinesResponse struct {
+	Version    string             `json:"version"`
+	ExportedAt string             `json:"exported_at"`
+	Pipelines  []ExportedPipeline `json:"pipelines"`
+	Total      int                `json:"total"`
+}
+
+// ExportedPipeline is a pipeline in export format (no server-generated fields like id, timestamps)
+type ExportedPipeline struct {
+	Name           string            `json:"name"`
+	Description    string            `json:"description"`
+	ExecutionMode  ExecutionMode     `json:"execution_mode"`
+	CronExpression string            `json:"cron_expression,omitempty"`
+	Status         PipelineStatus    `json:"status"`
+	Components     []ComponentConfig `json:"components"`
+	Connections    []Connection      `json:"connections"`
+}
+
+// ImportPipelinesRequest represents the request body for importing pipelines
+type ImportPipelinesRequest struct {
+	Pipelines       []ExportedPipeline `json:"pipelines"`
+	OverwriteByName bool               `json:"overwrite_by_name"`
+}
+
+// ImportPipelinesResponse represents the result of a pipeline import
+type ImportPipelinesResponse struct {
+	Imported    int      `json:"imported"`
+	Skipped     int      `json:"skipped"`
+	Overwritten int      `json:"overwritten"`
+	Errors      []string `json:"errors,omitempty"`
+	Message     string   `json:"message"`
+}

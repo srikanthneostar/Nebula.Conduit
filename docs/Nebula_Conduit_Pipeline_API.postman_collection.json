@@ -263,6 +263,80 @@
       ]
     },
     {
+      "name": "Import / Export",
+      "item": [
+        {
+          "name": "1. Export All Pipelines",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/pipelines/export",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "pipelines", "export"]
+            }
+          }
+        },
+        {
+          "name": "2. Export Selected Pipelines",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/pipelines/export?ids={{pipeline_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "pipelines", "export"],
+              "query": [
+                { "key": "ids", "value": "{{pipeline_id}}" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "3. Import Pipelines (Create New)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pipelines\": [\n    {\n      \"name\": \"Imported Pipeline\",\n      \"description\": \"A pipeline imported from file\",\n      \"execution_mode\": \"scheduled\",\n      \"cron_expression\": \"*/10 * * * *\",\n      \"status\": \"inactive\",\n      \"components\": [\n        {\n          \"id\": \"csv-reader-1\",\n          \"type\": \"csv_reader\",\n          \"parameters\": { \"file_path\": \"/path/to/data.csv\" },\n          \"retry_count\": 0,\n          \"retry_delay\": 0,\n          \"continue_on_error\": false,\n          \"timeout\": 30000000000\n        },\n        {\n          \"id\": \"log-sink-1\",\n          \"type\": \"log_sink\",\n          \"parameters\": { \"file_path\": \"/path/to/output.log\", \"log_level\": \"info\", \"format\": \"json\" },\n          \"retry_count\": 0,\n          \"retry_delay\": 0,\n          \"continue_on_error\": false,\n          \"timeout\": 10000000000\n        }\n      ],\n      \"connections\": [\n        { \"source_component_id\": \"csv-reader-1\", \"target_component_id\": \"log-sink-1\" }\n      ]\n    }\n  ],\n  \"overwrite_by_name\": false\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/pipelines/import",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "pipelines", "import"]
+            }
+          }
+        },
+        {
+          "name": "4. Import Pipelines (Overwrite by Name)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pipelines\": [\n    {\n      \"name\": \"CSV Reader to Log Pipeline\",\n      \"description\": \"Overwritten via import\",\n      \"execution_mode\": \"scheduled\",\n      \"cron_expression\": \"*/5 * * * *\",\n      \"status\": \"active\",\n      \"components\": [\n        {\n          \"id\": \"csv-reader-1\",\n          \"type\": \"csv_reader\",\n          \"parameters\": { \"file_path\": \"/path/to/data.csv\" },\n          \"retry_count\": 0,\n          \"retry_delay\": 0,\n          \"continue_on_error\": false,\n          \"timeout\": 30000000000\n        },\n        {\n          \"id\": \"log-sink-1\",\n          \"type\": \"log_sink\",\n          \"parameters\": { \"file_path\": \"/path/to/output.log\", \"log_level\": \"info\", \"format\": \"json\" },\n          \"retry_count\": 0,\n          \"retry_delay\": 0,\n          \"continue_on_error\": false,\n          \"timeout\": 10000000000\n        }\n      ],\n      \"connections\": [\n        { \"source_component_id\": \"csv-reader-1\", \"target_component_id\": \"log-sink-1\" }\n      ]\n    }\n  ],\n  \"overwrite_by_name\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/pipelines/import",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "pipelines", "import"]
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "Execution History",
       "item": [
         {
