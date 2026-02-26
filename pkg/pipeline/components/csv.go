@@ -58,12 +58,18 @@ func NewCSVReaderComponent(config pipeline.ComponentConfig) (pipeline.Component,
 
 // Execute runs the CSV Reader component logic
 func (c *CSVReaderComponent) Execute(ctx context.Context, input <-chan pipeline.Data) (<-chan pipeline.Data, error) {
+	return c.Start(ctx)
+}
+
+// Start implements SourceComponent interface
+func (c *CSVReaderComponent) Start(ctx context.Context) (<-chan pipeline.Data, error) {
 	output := make(chan pipeline.Data, 10)
 
 	go func() {
 		defer close(output)
 
 		if err := c.readAndSend(ctx, output); err != nil {
+			fmt.Printf("CSVReader error: %v\n", err)
 			// Log error but continue if continue_on_error is true
 			if !c.config.ContinueOnError {
 				return
@@ -76,6 +82,8 @@ func (c *CSVReaderComponent) Execute(ctx context.Context, input <-chan pipeline.
 
 // readAndSend reads the CSV file and sends data to output channel
 func (c *CSVReaderComponent) readAndSend(ctx context.Context, output chan<- pipeline.Data) error {
+	fmt.Printf("CSVReader: Opening file: %s\n", c.filePath)
+
 	// Open the CSV file
 	file, err := os.Open(c.filePath)
 	if err != nil {
@@ -95,22 +103,24 @@ func (c *CSVReaderComponent) readAndSend(ctx context.Context, output chan<- pipe
 		if err != nil {
 			return fmt.Errorf("failed to read header: %w", err)
 		}
+		fmt.Printf("CSVReader: Read headers: %v\n", headers)
 	}
 
-	// Read all rows
-	var results []map[string]interface{}
+	// Read and send rows one by one
 	rowNumber := 0
 
 	for {
 		// Check context cancellation
 		select {
 		case <-ctx.Done():
+			fmt.Printf("CSVReader: Context cancelled after %d rows\n", rowNumber)
 			return ctx.Err()
 		default:
 		}
 
 		record, err := reader.Read()
 		if err == io.EOF {
+			fmt.Printf("CSVReader: Finished reading %d rows\n", rowNumber)
 			break
 		}
 		if err != nil {
@@ -140,38 +150,38 @@ func (c *CSVReaderComponent) readAndSend(ctx context.Context, output chan<- pipe
 			}
 		}
 
-		results = append(results, rowMap)
+		// Convert row to JSON bytes
+		jsonData, err := json.Marshal(rowMap)
+		if err != nil {
+			return fmt.Errorf("failed to marshal row %d to JSON: %w", rowNumber, err)
+		}
+
+		// Create data payload for this row
+		data := pipeline.Data{
+			Payload:   jsonData,
+			Metadata:  make(map[string]string),
+			Timestamp: time.Now(),
+			TraceID:   fmt.Sprintf("%s-row-%d", c.config.ID, rowNumber),
+		}
+
+		// Add metadata
+		data.Metadata["row_number"] = fmt.Sprintf("%d", rowNumber)
+		data.Metadata["file_path"] = c.filePath
+		if c.hasHeader && len(headers) > 0 {
+			data.Metadata["column_count"] = fmt.Sprintf("%d", len(headers))
+		}
+
+		// Send data to output channel
+		select {
+		case output <- data:
+			fmt.Printf("CSVReader: Sent row %d\n", rowNumber)
+		case <-ctx.Done():
+			fmt.Printf("CSVReader: Context cancelled while sending row %d\n", rowNumber)
+			return ctx.Err()
+		}
 	}
 
-	// Convert results to JSON bytes
-	jsonData, err := json.Marshal(results)
-	if err != nil {
-		return fmt.Errorf("failed to marshal results to JSON: %w", err)
-	}
-
-	// Create data payload
-	data := pipeline.Data{
-		Payload:   jsonData,
-		Metadata:  make(map[string]string),
-		Timestamp: time.Now(),
-		TraceID:   c.config.ID,
-	}
-
-	// Add metadata
-	data.Metadata["row_count"] = fmt.Sprintf("%d", len(results))
-	data.Metadata["file_path"] = c.filePath
-	data.Metadata["has_header"] = fmt.Sprintf("%t", c.hasHeader)
-	if c.hasHeader && len(headers) > 0 {
-		data.Metadata["column_count"] = fmt.Sprintf("%d", len(headers))
-	}
-
-	// Send data to output channel
-	select {
-	case output <- data:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return nil
 }
 
 // Validate checks if the component configuration is valid

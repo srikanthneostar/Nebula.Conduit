@@ -51,25 +51,37 @@ func (l *LogSinkComponent) Execute(ctx context.Context, input <-chan pipeline.Da
 
 // Write consumes data and writes each item to the log file
 func (l *LogSinkComponent) Write(ctx context.Context, input <-chan pipeline.Data) error {
+	// Clean and normalize the file path
+	cleanPath := filepath.Clean(l.filePath)
+	fmt.Printf("LogSink: Attempting to write to file: %s\n", cleanPath)
+
 	// Ensure parent directory exists
-	if dir := filepath.Dir(l.filePath); dir != "" {
+	dir := filepath.Dir(cleanPath)
+	if dir != "" && dir != "." {
+		fmt.Printf("LogSink: Creating directory: %s\n", dir)
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("failed to create log directory: %w", err)
+			return fmt.Errorf("failed to create log directory %s: %w", dir, err)
 		}
+		fmt.Printf("LogSink: Directory created successfully: %s\n", dir)
 	}
 
-	file, err := os.OpenFile(l.filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	fmt.Printf("LogSink: Opening file: %s\n", cleanPath)
+	file, err := os.OpenFile(cleanPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		return fmt.Errorf("failed to open log file: %w", err)
+		return fmt.Errorf("failed to open log file %s: %w", cleanPath, err)
 	}
 	defer file.Close()
+	fmt.Printf("LogSink: File opened successfully, waiting for data...\n")
 
+	dataCount := 0
 	for {
 		select {
 		case <-ctx.Done():
+			fmt.Printf("LogSink: Context cancelled, wrote %d records\n", dataCount)
 			return ctx.Err()
 		case data, ok := <-input:
 			if !ok {
+				fmt.Printf("LogSink: Input channel closed, wrote %d records total\n", dataCount)
 				return nil
 			}
 			line := l.formatLine(data)
@@ -77,6 +89,10 @@ func (l *LogSinkComponent) Write(ctx context.Context, input <-chan pipeline.Data
 				if !l.config.ContinueOnError {
 					return fmt.Errorf("failed to write to log file: %w", err)
 				}
+				fmt.Printf("LogSink: Write error (continuing): %v\n", err)
+			} else {
+				dataCount++
+				fmt.Printf("LogSink: Wrote record %d\n", dataCount)
 			}
 		}
 	}
