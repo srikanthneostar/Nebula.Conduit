@@ -1,8 +1,11 @@
-# Build stage
-FROM golang:1.24-alpine AS builder
+# Build stage — use Debian-based image so the CGO binary links against glibc,
+# matching the Debian runtime stage below.
+FROM golang:1.24-bookworm AS builder
 
 # Install build dependencies
-RUN apk add --no-cache git gcc musl-dev sqlite-dev
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git gcc libsqlite3-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
@@ -17,7 +20,7 @@ RUN go mod download
 COPY . .
 
 # Build the application
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o nebula-conduit ./cmd/server
+RUN CGO_ENABLED=1 GOOS=linux go build -a -o nebula-conduit ./cmd/server
 
 # Runtime stage
 FROM debian:trixie-slim
@@ -44,6 +47,9 @@ COPY --from=builder /app/nebula-conduit .
 
 # Copy commons directory (config, certs, migrations, algorithms, etc.)
 COPY --from=builder /app/commons ./commons
+
+# Copy sample data into commons for pipeline usage
+COPY --from=builder /app/docs/sample_data.csv ./commons/sample_data.csv
 
 # Create virtual environment and install Python dependencies
 RUN python3 -m venv /opt/venv && \

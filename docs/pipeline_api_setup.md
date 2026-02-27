@@ -1,51 +1,16 @@
 # Pipeline API Setup
 
-## Important: Wiring Pipeline Routes
+## Automatic Initialization
 
-The pipeline API routes need to be registered in the server. Add the following to `internal/api/server.go` in the `NewServer` function.
+The pipeline engine is fully initialized inside `NewServer()` in `internal/api/server.go`. No manual setup steps are required.
 
-### Step 1: Add imports
+On server startup, `NewServer()` automatically:
+1. Creates the component factory and registers all built-in components
+2. Creates the pipeline repository, metrics collector, and engine
+3. Calls `pipelineEngine.Initialize(ctx)` which starts the scheduler and loads all active pipelines
+4. Registers pipeline API routes under the authenticated route group
 
-Add these imports to `internal/api/server.go`:
-
-```go
-"github.com/Xecutables/Nebula.Conduit/pkg/pipeline"
-"github.com/Xecutables/Nebula.Conduit/pkg/pipeline/components"
-```
-
-### Step 2: Add pipeline engine initialization
-
-Add this code in `NewServer()` after the existing service initialization (after `s.taskService = ...`):
-
-```go
-// Initialize pipeline engine
-pipelineFactory := pipeline.NewComponentFactory()
-components.RegisterComponents(pipelineFactory)
-pipelineRepo := pipeline.NewSQLPipelineRepository(db)
-pipelineMetrics := pipeline.NewDefaultMetricsCollector()
-pipelineConfig := pipeline.PipelineEngineConfig{
-    MaxConcurrentInstances:    10,
-    MaxGoroutinesPerInstance:  50,
-    ExecutionHistoryRetention: 30,
-}
-pipelineEngine := pipeline.NewPipelineEngine(db, pipelineRepo, pipelineFactory, nil, nil, pipelineMetrics, pipelineConfig)
-```
-
-### Step 3: Register pipeline routes
-
-Add this inside the protected routes group (after `r.Get("/tasks", s.handleListTasks)`):
-
-```go
-pipeline.RegisterRoutes(r, pipelineEngine)
-```
-
-### Step 4: Initialize engine on startup
-
-Add this after `server := api.NewServer(db, cfg)` in `cmd/server/main.go`:
-
-```go
-// Initialize pipeline engine is handled internally
-```
+The pipeline engine is stored as a field on the `Server` struct (`s.pipelineEngine`) and passed to `pipeline.RegisterRoutes()`.
 
 ## Testing with Postman
 
@@ -66,6 +31,12 @@ curl -k -X POST https://localhost:8080/api/v1/pipelines \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -d @docs/sample_pipeline_csv_to_log.json
 
+# Create pipeline with archive support
+curl -k -X POST https://localhost:8080/api/v1/pipelines \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d @docs/sample_pipeline_csv_with_archive.json
+
 # Trigger pipeline (replace PIPELINE_ID)
 curl -k -X POST https://localhost:8080/api/v1/pipelines/PIPELINE_ID/trigger \
   -H "Authorization: Bearer YOUR_TOKEN"
@@ -73,4 +44,26 @@ curl -k -X POST https://localhost:8080/api/v1/pipelines/PIPELINE_ID/trigger \
 # List pipelines
 curl -k https://localhost:8080/api/v1/pipelines \
   -H "Authorization: Bearer YOUR_TOKEN"
+
+# Export all pipelines
+curl -k https://localhost:8080/api/v1/pipelines/export \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -o pipelines-export.json
+
+# Import pipelines
+curl -k -X POST https://localhost:8080/api/v1/pipelines/import \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d @pipelines-export.json
 ```
+
+## Sample Pipelines
+
+Two sample pipeline JSON files are provided in the `docs/` folder:
+
+| File | Description |
+|------|-------------|
+| `sample_pipeline_csv_to_log.json` | Basic CSV → attribute_update → log_sink pipeline |
+| `sample_pipeline_csv_with_archive.json` | Same flow but with `archive_on_read` and `move_on_error` enabled on the CSV reader |
+
+Both use `attribute_update` to set `{{variables}}` that `log_sink` resolves at runtime.

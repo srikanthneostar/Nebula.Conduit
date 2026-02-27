@@ -48,6 +48,18 @@ build-push-conduit:
     expire_in: 1 hour
 
 # -------- Deploy to Kubernetes ----------
+print-commons-path:
+  stage: kubernetes-deploy
+  image: bitnami/kubectl:1.27
+  script:
+    - echo "Fetching commons full path from running container..."
+    - POD=$(kubectl get pods -n core-insights-nebula -l app=nebula-conduit -o jsonpath='{.items[0].metadata.name}')
+    - kubectl exec $POD -n core-insights-nebula -- ls -la /app/commons
+    - kubectl exec $POD -n core-insights-nebula -- realpath /app/commons
+  needs:
+    - job: build-push-conduit
+  allow_failure: true
+
 kubernetes-apply:
   stage: kubernetes-deploy
   image: bitnami/kubectl:1.27
