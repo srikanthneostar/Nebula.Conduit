@@ -40,7 +40,7 @@ func NewPythonExecutor(repo repository.TaskRepository, cfg *config.PathConfig, t
 	// Ensure the scripts directory exists
 	if err := os.MkdirAll(cfg.PythonScriptsHome, 0755); err != nil {
 		logger := logger.InitLogger()
-		logger.Fatal().Err(err).Msg("Failed to create Python scripts directory")
+		logger.Warn().Err(err).Msg("Failed to create Python scripts directory - Python execution may not work")
 	}
 
 	// Determine Python command based on platform or configuration

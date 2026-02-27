@@ -11,7 +11,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-func InitLogger() zerolog.Logger {
+func InitLogger(name ...string) zerolog.Logger {
 	envValue := os.Getenv("NEBULA_CONDUIT_HOME")
 	if envValue == "" {
 		fmt.Println("Environment variable NEBULA_CONDUIT_HOME is not set.")
@@ -20,8 +20,12 @@ func InitLogger() zerolog.Logger {
 
 	configPath := filepath.Join(envValue, "config.yaml")
 
-	// Use absolute path for log file
-	logPath := filepath.Join(envValue, "logs", "app.log")
+	// Use logger name for the log filename if provided, otherwise default to "app"
+	logName := "app"
+	if len(name) > 0 && name[0] != "" {
+		logName = name[0]
+	}
+	logPath := filepath.Join(envValue, "logs", logName+".log")
 
 	// Ensure logs directory exists
 	logDir := filepath.Dir(logPath)
@@ -29,12 +33,14 @@ func InitLogger() zerolog.Logger {
 		fmt.Printf("Failed to create log directory: %v\n", err)
 	}
 
+	// Rolling file: rotates at 50MB, keeps 7 backups up to 30 days, compresses old files
 	rotator := &lumberjack.Logger{
 		Filename:   logPath,
 		MaxSize:    50,
 		MaxBackups: 7,
 		MaxAge:     30,
 		Compress:   true,
+		LocalTime:  true,
 	}
 
 	cfg, err := config.LoadConfig(configPath)
@@ -54,7 +60,11 @@ func InitLogger() zerolog.Logger {
 		rotator,
 	)
 
-	logger := zerolog.New(multi).With().Timestamp().Logger()
+	logContext := zerolog.New(multi).With().Timestamp()
+	if len(name) > 0 && name[0] != "" {
+		logContext = logContext.Str("logger", name[0])
+	}
+	logger := logContext.Logger()
 	zerolog.SetGlobalLevel(logLevel)
 
 	fmt.Printf("Logger initialized. Writing to: %s\n", logPath)

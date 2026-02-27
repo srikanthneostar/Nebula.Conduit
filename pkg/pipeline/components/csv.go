@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/Xecutables/Nebula.Conduit/pkg/logger"
 	"github.com/Xecutables/Nebula.Conduit/pkg/pipeline"
 )
 
@@ -99,7 +100,20 @@ func (c *CSVReaderComponent) Execute(ctx context.Context, input <-chan pipeline.
 
 // Start implements SourceComponent interface
 func (c *CSVReaderComponent) Start(ctx context.Context) (<-chan pipeline.Data, error) {
+	log := logger.InitLogger("csv_reader")
 	output := make(chan pipeline.Data, 10)
+
+	log.Info().
+		Str("component_id", c.config.ID).
+		Str("file_path", c.filePath).
+		Str("delimiter", string(c.delimiter)).
+		Bool("has_header", c.hasHeader).
+		Str("encoding", c.encoding).
+		Bool("archive_on_read", c.archiveOnRead).
+		Bool("move_on_error", c.moveOnError).
+		Str("archive_folder", c.archiveFolder).
+		Str("error_folder", c.errorFolder).
+		Msg("CSVReader: Starting component")
 
 	go func() {
 		defer close(output)
@@ -107,28 +121,54 @@ func (c *CSVReaderComponent) Start(ctx context.Context) (<-chan pipeline.Data, e
 		err := c.readAndSend(ctx, output)
 
 		if err != nil {
-			fmt.Printf("CSVReader error: %v\n", err)
+			log.Error().
+				Err(err).
+				Str("component_id", c.config.ID).
+				Str("file_path", c.filePath).
+				Msg("CSVReader: readAndSend failed")
 
 			// Move file to error folder if move_on_error is enabled
 			if c.moveOnError {
 				if moveErr := c.moveToErrorFolder(); moveErr != nil {
-					fmt.Printf("CSVReader: Failed to move file to error folder: %v\n", moveErr)
+					log.Error().
+						Err(moveErr).
+						Str("component_id", c.config.ID).
+						Str("error_folder", c.errorFolder).
+						Msg("CSVReader: Failed to move file to error folder")
 				} else {
-					fmt.Printf("CSVReader: File moved to error folder successfully\n")
+					log.Info().
+						Str("component_id", c.config.ID).
+						Str("error_folder", c.errorFolder).
+						Msg("CSVReader: File moved to error folder successfully")
 				}
 			}
 
-			// Log error but continue if continue_on_error is true
 			if !c.config.ContinueOnError {
+				log.Warn().
+					Str("component_id", c.config.ID).
+					Msg("CSVReader: Stopping due to error (continue_on_error=false)")
 				return
 			}
+			log.Warn().
+				Str("component_id", c.config.ID).
+				Msg("CSVReader: Continuing despite error (continue_on_error=true)")
 		} else {
-			// Move file to archive folder if archive_on_read is enabled and read was successful
+			log.Info().
+				Str("component_id", c.config.ID).
+				Msg("CSVReader: readAndSend completed successfully")
+
 			if c.archiveOnRead {
 				if archiveErr := c.moveToArchiveFolder(); archiveErr != nil {
-					fmt.Printf("CSVReader: Failed to move file to archive folder: %v\n", archiveErr)
+					log.Error().
+						Err(archiveErr).
+						Str("component_id", c.config.ID).
+						Str("archive_folder", c.archiveFolder).
+						Msg("CSVReader: Failed to move file to archive folder")
 				} else {
-					fmt.Printf("CSVReader: File moved to archive folder successfully\n")
+					log.Info().
+						Str("component_id", c.config.ID).
+						Str("archive_folder", c.archiveFolder).
+						Msg("CSVReader: File archived successfully")
 				}
 			}
 		}
@@ -139,11 +179,33 @@ func (c *CSVReaderComponent) Start(ctx context.Context) (<-chan pipeline.Data, e
 
 // readAndSend reads the CSV file and sends data to output channel
 func (c *CSVReaderComponent) readAndSend(ctx context.Context, output chan<- pipeline.Data) error {
-	fmt.Printf("CSVReader: Opening file: %s\n", c.filePath)
+	log := logger.InitLogger("csv_reader")
+
+	// Check if file exists before attempting to open
+	fileInfo, statErr := os.Stat(c.filePath)
+	if statErr != nil {
+		log.Error().
+			Err(statErr).
+			Str("component_id", c.config.ID).
+			Str("file_path", c.filePath).
+			Msg("CSVReader: File stat failed - file may not exist or is inaccessible")
+		return fmt.Errorf("file stat failed for %s: %w", c.filePath, statErr)
+	}
+	log.Info().
+		Str("component_id", c.config.ID).
+		Str("file_path", c.filePath).
+		Int64("file_size_bytes", fileInfo.Size()).
+		Str("file_modified", fileInfo.ModTime().Format(time.RFC3339)).
+		Msg("CSVReader: Opening file")
 
 	// Open the CSV file
 	file, err := os.Open(c.filePath)
 	if err != nil {
+		log.Error().
+			Err(err).
+			Str("component_id", c.config.ID).
+			Str("file_path", c.filePath).
+			Msg("CSVReader: Failed to open file")
 		return fmt.Errorf("failed to open file: %w", err)
 	}
 	defer file.Close()
@@ -152,56 +214,99 @@ func (c *CSVReaderComponent) readAndSend(ctx context.Context, output chan<- pipe
 	reader := csv.NewReader(file)
 	reader.Comma = c.delimiter
 	reader.TrimLeadingSpace = true
+	log.Debug().
+		Str("component_id", c.config.ID).
+		Str("delimiter", string(c.delimiter)).
+		Msg("CSVReader: CSV reader created")
 
 	// Read header if present
 	var headers []string
 	if c.hasHeader {
 		headers, err = reader.Read()
 		if err != nil {
+			log.Error().
+				Err(err).
+				Str("component_id", c.config.ID).
+				Str("file_path", c.filePath).
+				Msg("CSVReader: Failed to read CSV header row")
 			return fmt.Errorf("failed to read header: %w", err)
 		}
-		fmt.Printf("CSVReader: Read headers: %v\n", headers)
+		log.Info().
+			Str("component_id", c.config.ID).
+			Int("header_count", len(headers)).
+			Strs("headers", headers).
+			Msg("CSVReader: Headers read successfully")
+	} else {
+		log.Info().
+			Str("component_id", c.config.ID).
+			Msg("CSVReader: No header row configured, using column indices")
 	}
 
 	// Read and send rows one by one
 	rowNumber := 0
+	errorCount := 0
 
 	for {
 		// Check context cancellation
 		select {
 		case <-ctx.Done():
-			fmt.Printf("CSVReader: Context cancelled after %d rows\n", rowNumber)
+			log.Warn().
+				Str("component_id", c.config.ID).
+				Int("rows_processed", rowNumber).
+				Int("errors_encountered", errorCount).
+				Err(ctx.Err()).
+				Msg("CSVReader: Context cancelled during read loop")
 			return ctx.Err()
 		default:
 		}
 
 		record, err := reader.Read()
 		if err == io.EOF {
-			fmt.Printf("CSVReader: Finished reading %d rows\n", rowNumber)
+			log.Info().
+				Str("component_id", c.config.ID).
+				Int("total_rows", rowNumber).
+				Int("errors_encountered", errorCount).
+				Str("file_path", c.filePath).
+				Msg("CSVReader: Finished reading all rows")
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("failed to read row %d: %w", rowNumber, err)
+			errorCount++
+			log.Error().
+				Err(err).
+				Str("component_id", c.config.ID).
+				Str("file_path", c.filePath).
+				Int("row_number", rowNumber+1).
+				Int("errors_so_far", errorCount).
+				Msg("CSVReader: Failed to read CSV row")
+			return fmt.Errorf("failed to read row %d: %w", rowNumber+1, err)
 		}
 
 		rowNumber++
 
+		// Validate column count against headers
+		if c.hasHeader && len(headers) > 0 && len(record) != len(headers) {
+			log.Warn().
+				Str("component_id", c.config.ID).
+				Int("row_number", rowNumber).
+				Int("expected_columns", len(headers)).
+				Int("actual_columns", len(record)).
+				Msg("CSVReader: Column count mismatch in row")
+		}
+
 		// Create row map
-		var rowMap map[string]interface{}
+		var rowMap map[string]any
 		if c.hasHeader && len(headers) > 0 {
-			// Use headers as keys
-			rowMap = make(map[string]interface{})
+			rowMap = make(map[string]any)
 			for i, value := range record {
 				if i < len(headers) {
 					rowMap[headers[i]] = value
 				} else {
-					// Handle extra columns beyond headers
 					rowMap[fmt.Sprintf("column_%d", i)] = value
 				}
 			}
 		} else {
-			// Use column indices as keys
-			rowMap = make(map[string]interface{})
+			rowMap = make(map[string]any)
 			for i, value := range record {
 				rowMap[fmt.Sprintf("column_%d", i)] = value
 			}
@@ -210,6 +315,13 @@ func (c *CSVReaderComponent) readAndSend(ctx context.Context, output chan<- pipe
 		// Convert row to JSON bytes
 		jsonData, err := json.Marshal(rowMap)
 		if err != nil {
+			errorCount++
+			log.Error().
+				Err(err).
+				Str("component_id", c.config.ID).
+				Int("row_number", rowNumber).
+				Int("record_fields", len(record)).
+				Msg("CSVReader: Failed to marshal row to JSON")
 			return fmt.Errorf("failed to marshal row %d to JSON: %w", rowNumber, err)
 		}
 
@@ -231,9 +343,18 @@ func (c *CSVReaderComponent) readAndSend(ctx context.Context, output chan<- pipe
 		// Send data to output channel
 		select {
 		case output <- data:
-			fmt.Printf("CSVReader: Sent row %d\n", rowNumber)
+			log.Debug().
+				Str("component_id", c.config.ID).
+				Int("row_number", rowNumber).
+				Int("payload_bytes", len(jsonData)).
+				Msg("CSVReader: Row sent to output channel")
 		case <-ctx.Done():
-			fmt.Printf("CSVReader: Context cancelled while sending row %d\n", rowNumber)
+			log.Warn().
+				Str("component_id", c.config.ID).
+				Int("row_number", rowNumber).
+				Int("rows_sent", rowNumber-1).
+				Err(ctx.Err()).
+				Msg("CSVReader: Context cancelled while sending row to output channel")
 			return ctx.Err()
 		}
 	}
@@ -272,14 +393,22 @@ func (c *CSVReaderComponent) Config() pipeline.ComponentConfig {
 
 // moveToArchiveFolder moves the CSV file to the archive folder with timestamp
 func (c *CSVReaderComponent) moveToArchiveFolder() error {
-	fmt.Printf("CSVReader: Moving file to archive folder: %s\n", c.archiveFolder)
+	log := logger.InitLogger("csv_reader")
+	log.Info().
+		Str("component_id", c.config.ID).
+		Str("file_path", c.filePath).
+		Str("archive_folder", c.archiveFolder).
+		Msg("CSVReader: Moving file to archive folder")
 
-	// Create archive folder if it doesn't exist
 	if err := os.MkdirAll(c.archiveFolder, 0755); err != nil {
+		log.Error().
+			Err(err).
+			Str("component_id", c.config.ID).
+			Str("archive_folder", c.archiveFolder).
+			Msg("CSVReader: Failed to create archive folder")
 		return fmt.Errorf("failed to create archive folder: %w", err)
 	}
 
-	// Generate new filename with timestamp
 	fileName := filepath.Base(c.filePath)
 	fileExt := filepath.Ext(fileName)
 	fileNameWithoutExt := fileName[:len(fileName)-len(fileExt)]
@@ -287,27 +416,47 @@ func (c *CSVReaderComponent) moveToArchiveFolder() error {
 	newFileName := fmt.Sprintf("%s_archive_%s%s", fileNameWithoutExt, timestamp, fileExt)
 	newFilePath := filepath.Join(c.archiveFolder, newFileName)
 
-	fmt.Printf("CSVReader: Renaming %s to %s\n", c.filePath, newFilePath)
+	log.Debug().
+		Str("component_id", c.config.ID).
+		Str("source", c.filePath).
+		Str("destination", newFilePath).
+		Msg("CSVReader: Renaming file for archive")
 
-	// Move (rename) the file
 	if err := os.Rename(c.filePath, newFilePath); err != nil {
+		log.Error().
+			Err(err).
+			Str("component_id", c.config.ID).
+			Str("source", c.filePath).
+			Str("destination", newFilePath).
+			Msg("CSVReader: Failed to move file to archive")
 		return fmt.Errorf("failed to move file to archive: %w", err)
 	}
 
-	fmt.Printf("CSVReader: File archived successfully as %s\n", newFileName)
+	log.Info().
+		Str("component_id", c.config.ID).
+		Str("archived_as", newFileName).
+		Msg("CSVReader: File archived successfully")
 	return nil
 }
 
 // moveToErrorFolder moves the CSV file to the error folder with timestamp
 func (c *CSVReaderComponent) moveToErrorFolder() error {
-	fmt.Printf("CSVReader: Moving file to error folder: %s\n", c.errorFolder)
+	log := logger.InitLogger("csv_reader")
+	log.Info().
+		Str("component_id", c.config.ID).
+		Str("file_path", c.filePath).
+		Str("error_folder", c.errorFolder).
+		Msg("CSVReader: Moving file to error folder")
 
-	// Create error folder if it doesn't exist
 	if err := os.MkdirAll(c.errorFolder, 0755); err != nil {
+		log.Error().
+			Err(err).
+			Str("component_id", c.config.ID).
+			Str("error_folder", c.errorFolder).
+			Msg("CSVReader: Failed to create error folder")
 		return fmt.Errorf("failed to create error folder: %w", err)
 	}
 
-	// Generate new filename with timestamp
 	fileName := filepath.Base(c.filePath)
 	fileExt := filepath.Ext(fileName)
 	fileNameWithoutExt := fileName[:len(fileName)-len(fileExt)]
@@ -315,13 +464,25 @@ func (c *CSVReaderComponent) moveToErrorFolder() error {
 	newFileName := fmt.Sprintf("%s_error_%s%s", fileNameWithoutExt, timestamp, fileExt)
 	newFilePath := filepath.Join(c.errorFolder, newFileName)
 
-	fmt.Printf("CSVReader: Renaming %s to %s\n", c.filePath, newFilePath)
+	log.Debug().
+		Str("component_id", c.config.ID).
+		Str("source", c.filePath).
+		Str("destination", newFilePath).
+		Msg("CSVReader: Renaming file for error folder")
 
-	// Move (rename) the file
 	if err := os.Rename(c.filePath, newFilePath); err != nil {
+		log.Error().
+			Err(err).
+			Str("component_id", c.config.ID).
+			Str("source", c.filePath).
+			Str("destination", newFilePath).
+			Msg("CSVReader: Failed to move file to error folder")
 		return fmt.Errorf("failed to move file to error folder: %w", err)
 	}
 
-	fmt.Printf("CSVReader: File moved to error folder successfully as %s\n", newFileName)
+	log.Info().
+		Str("component_id", c.config.ID).
+		Str("error_file", newFileName).
+		Msg("CSVReader: File moved to error folder successfully")
 	return nil
 }
