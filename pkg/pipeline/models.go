@@ -45,6 +45,7 @@ const (
 	ComponentTypeHL7Reader          ComponentType = "hl7_reader"
 	ComponentTypeTCPRead            ComponentType = "tcp_read"
 	ComponentTypeS3Reader           ComponentType = "s3_reader"
+	ComponentTypeMinIOReader        ComponentType = "minio_reader"
 	ComponentTypeAzureBlobReader    ComponentType = "azure_blob_reader"
 	ComponentTypeLocalStorageReader ComponentType = "local_storage_reader"
 
@@ -60,6 +61,7 @@ const (
 	ComponentTypeTCPWrite           ComponentType = "tcp_write"
 	ComponentTypeLogSink            ComponentType = "log_sink"
 	ComponentTypeS3Writer           ComponentType = "s3_writer"
+	ComponentTypeMinIOWriter        ComponentType = "minio_writer"
 	ComponentTypeAzureBlobWriter    ComponentType = "azure_blob_writer"
 	ComponentTypeLocalStorageWriter ComponentType = "local_storage_writer"
 )

@@ -15,6 +15,7 @@ func RegisterComponents(factory pipeline.ComponentFactory) {
 	factory.Register(pipeline.ComponentTypeRabbitMQConsumer, NewRabbitMQConsumerComponent)
 	factory.Register(pipeline.ComponentTypeHL7Reader, NewHL7ReaderComponent)
 	factory.Register(pipeline.ComponentTypeS3Reader, NewS3ReaderComponent)
+	factory.Register(pipeline.ComponentTypeMinIOReader, NewMinIOReaderComponent)
 	factory.Register(pipeline.ComponentTypeAzureBlobReader, NewAzureBlobReaderComponent)
 	factory.Register(pipeline.ComponentTypeLocalStorageReader, NewLocalStorageReaderComponent)
 
@@ -30,6 +31,7 @@ func RegisterComponents(factory pipeline.ComponentFactory) {
 	factory.Register(pipeline.ComponentTypeRabbitMQProducer, NewRabbitMQProducerComponent)
 	factory.Register(pipeline.ComponentTypeLogSink, NewLogSinkComponent)
 	factory.Register(pipeline.ComponentTypeS3Writer, NewS3WriterComponent)
+	factory.Register(pipeline.ComponentTypeMinIOWriter, NewMinIOWriterComponent)
 	factory.Register(pipeline.ComponentTypeAzureBlobWriter, NewAzureBlobWriterComponent)
 	factory.Register(pipeline.ComponentTypeLocalStorageWriter, NewLocalStorageWriterComponent)
 }
