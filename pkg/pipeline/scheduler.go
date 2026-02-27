@@ -28,18 +28,20 @@ type Scheduler interface {
 
 // defaultScheduler implements the Scheduler interface using cron
 type defaultScheduler struct {
-	cron     *cron.Cron
-	executor Executor
-	entries  map[string]cron.EntryID // pipelineID -> cron entry ID
-	mu       sync.RWMutex
+	cron              *cron.Cron
+	executor          Executor
+	entries           map[string]cron.EntryID // pipelineID -> cron entry ID
+	runningExecutions map[string]bool         // pipelineID -> is running
+	mu                sync.RWMutex
 }
 
 // NewScheduler creates a new scheduler instance
 func NewScheduler(executor Executor) Scheduler {
 	return &defaultScheduler{
-		cron:     cron.New(),
-		executor: executor,
-		entries:  make(map[string]cron.EntryID),
+		cron:              cron.New(),
+		executor:          executor,
+		entries:           make(map[string]cron.EntryID),
+		runningExecutions: make(map[string]bool),
 	}
 }
 
@@ -70,13 +72,41 @@ func (s *defaultScheduler) Schedule(pipeline PipelineDefinition) error {
 
 	// Add new schedule
 	entryID, err := s.cron.AddFunc(pipeline.CronExpression, func() {
+		// Check if pipeline is already running
+		s.mu.Lock()
+		isRunning := s.runningExecutions[pipeline.ID]
+		if isRunning {
+			s.mu.Unlock()
+			fmt.Printf("⚠️  BACKPRESSURE: Pipeline %s (%s) is still running from previous execution, skipping this scheduled run\n",
+				pipeline.Name, pipeline.ID)
+			return
+		}
+		// Mark as running
+		s.runningExecutions[pipeline.ID] = true
+		s.mu.Unlock()
+
+		fmt.Printf("▶️  SCHEDULER: Starting scheduled execution of pipeline %s (%s)\n", pipeline.Name, pipeline.ID)
+
 		// Execute pipeline in background
 		ctx := context.Background()
-		_, err := s.executor.Execute(ctx, pipeline)
+		instance, err := s.executor.Execute(ctx, pipeline)
 		if err != nil {
-			// Log error (in production, use proper logger)
-			fmt.Printf("scheduled execution of pipeline %s failed: %v\n", pipeline.ID, err)
+			// Log error and mark as not running
+			fmt.Printf("❌ SCHEDULER: Scheduled execution of pipeline %s failed: %v\n", pipeline.ID, err)
+			s.mu.Lock()
+			s.runningExecutions[pipeline.ID] = false
+			s.mu.Unlock()
+			return
 		}
+
+		// Monitor the instance and mark as not running when complete
+		go func() {
+			instance.WaitGroup.Wait()
+			s.mu.Lock()
+			s.runningExecutions[pipeline.ID] = false
+			s.mu.Unlock()
+			fmt.Printf("✅ SCHEDULER: Pipeline %s (%s) execution completed\n", pipeline.Name, pipeline.ID)
+		}()
 	})
 
 	if err != nil {
@@ -99,6 +129,7 @@ func (s *defaultScheduler) Unschedule(pipelineID string) error {
 
 	s.cron.Remove(entryID)
 	delete(s.entries, pipelineID)
+	delete(s.runningExecutions, pipelineID)
 	return nil
 }
 

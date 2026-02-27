@@ -16,15 +16,18 @@ import (
 
 // CSVReaderComponent reads data from CSV files
 type CSVReaderComponent struct {
-	config        pipeline.ComponentConfig
-	filePath      string
-	delimiter     rune
-	hasHeader     bool
-	encoding      string
-	archiveOnRead bool
-	moveOnError   bool
-	archiveFolder string
-	errorFolder   string
+	config            pipeline.ComponentConfig
+	filePath          string
+	delimiter         rune
+	hasHeader         bool
+	encoding          string
+	archiveOnRead     bool
+	moveOnError       bool
+	archiveFolder     string
+	errorFolder       string
+	lazyQuotes        bool
+	fieldsPerRecord   int // -1 = variable, 0 = infer from first row, >0 = exact count
+	skipMalformedRows bool
 }
 
 // NewCSVReaderComponent creates a new CSV Reader component
@@ -80,16 +83,45 @@ func NewCSVReaderComponent(config pipeline.ComponentConfig) (pipeline.Component,
 		errorFolder = customError
 	}
 
+	// Extract lazy_quotes flag (optional, defaults to false)
+	// When true, allows quotes to appear in unquoted fields and non-doubled quotes in quoted fields
+	lazyQuotes := false
+	if lazyParam, ok := config.Parameters["lazy_quotes"].(bool); ok {
+		lazyQuotes = lazyParam
+	}
+
+	// Extract fields_per_record (optional, defaults to 0 which means infer from first row)
+	// -1 = variable (allow any number of fields)
+	// 0 = infer from first row (default, strict checking)
+	// >0 = exact field count required
+	fieldsPerRecord := 0
+	if fieldsParam, ok := config.Parameters["fields_per_record"].(float64); ok {
+		fieldsPerRecord = int(fieldsParam)
+	} else if fieldsParam, ok := config.Parameters["fields_per_record"].(int); ok {
+		fieldsPerRecord = fieldsParam
+	}
+
+	// Extract skip_malformed_rows flag (optional, defaults to true)
+	// When true, logs malformed rows but continues processing instead of failing
+	// This is the default behavior to handle real-world CSV files gracefully
+	skipMalformedRows := true
+	if skipParam, ok := config.Parameters["skip_malformed_rows"].(bool); ok {
+		skipMalformedRows = skipParam
+	}
+
 	return &CSVReaderComponent{
-		config:        config,
-		filePath:      filePath,
-		delimiter:     delimiter,
-		hasHeader:     hasHeader,
-		encoding:      encoding,
-		archiveOnRead: archiveOnRead,
-		moveOnError:   moveOnError,
-		archiveFolder: archiveFolder,
-		errorFolder:   errorFolder,
+		config:            config,
+		filePath:          filePath,
+		delimiter:         delimiter,
+		hasHeader:         hasHeader,
+		encoding:          encoding,
+		archiveOnRead:     archiveOnRead,
+		moveOnError:       moveOnError,
+		archiveFolder:     archiveFolder,
+		errorFolder:       errorFolder,
+		lazyQuotes:        lazyQuotes,
+		fieldsPerRecord:   fieldsPerRecord,
+		skipMalformedRows: skipMalformedRows,
 	}, nil
 }
 
@@ -106,13 +138,8 @@ func (c *CSVReaderComponent) Start(ctx context.Context) (<-chan pipeline.Data, e
 	log.Info().
 		Str("component_id", c.config.ID).
 		Str("file_path", c.filePath).
-		Str("delimiter", string(c.delimiter)).
-		Bool("has_header", c.hasHeader).
-		Str("encoding", c.encoding).
-		Bool("archive_on_read", c.archiveOnRead).
-		Bool("move_on_error", c.moveOnError).
-		Str("archive_folder", c.archiveFolder).
-		Str("error_folder", c.errorFolder).
+		Bool("skip_malformed_rows", c.skipMalformedRows).
+		Int("fields_per_record", c.fieldsPerRecord).
 		Msg("CSVReader: Starting component")
 
 	go func() {
@@ -124,51 +151,27 @@ func (c *CSVReaderComponent) Start(ctx context.Context) (<-chan pipeline.Data, e
 			log.Error().
 				Err(err).
 				Str("component_id", c.config.ID).
-				Str("file_path", c.filePath).
-				Msg("CSVReader: readAndSend failed")
+				Msg("CSVReader: Failed to read file")
 
 			// Move file to error folder if move_on_error is enabled
 			if c.moveOnError {
 				if moveErr := c.moveToErrorFolder(); moveErr != nil {
-					log.Error().
-						Err(moveErr).
-						Str("component_id", c.config.ID).
-						Str("error_folder", c.errorFolder).
-						Msg("CSVReader: Failed to move file to error folder")
+					log.Error().Err(moveErr).Msg("CSVReader: Failed to move file to error folder")
 				} else {
-					log.Info().
-						Str("component_id", c.config.ID).
-						Str("error_folder", c.errorFolder).
-						Msg("CSVReader: File moved to error folder successfully")
+					log.Info().Msg("CSVReader: File moved to error folder")
 				}
 			}
 
 			if !c.config.ContinueOnError {
-				log.Warn().
-					Str("component_id", c.config.ID).
-					Msg("CSVReader: Stopping due to error (continue_on_error=false)")
 				return
 			}
-			log.Warn().
-				Str("component_id", c.config.ID).
-				Msg("CSVReader: Continuing despite error (continue_on_error=true)")
 		} else {
-			log.Info().
-				Str("component_id", c.config.ID).
-				Msg("CSVReader: readAndSend completed successfully")
-
+			// Move file to archive folder if archive_on_read is enabled
 			if c.archiveOnRead {
 				if archiveErr := c.moveToArchiveFolder(); archiveErr != nil {
-					log.Error().
-						Err(archiveErr).
-						Str("component_id", c.config.ID).
-						Str("archive_folder", c.archiveFolder).
-						Msg("CSVReader: Failed to move file to archive folder")
+					log.Error().Err(archiveErr).Msg("CSVReader: Failed to archive file")
 				} else {
-					log.Info().
-						Str("component_id", c.config.ID).
-						Str("archive_folder", c.archiveFolder).
-						Msg("CSVReader: File archived successfully")
+					log.Info().Msg("CSVReader: File archived successfully")
 				}
 			}
 		}
@@ -181,31 +184,10 @@ func (c *CSVReaderComponent) Start(ctx context.Context) (<-chan pipeline.Data, e
 func (c *CSVReaderComponent) readAndSend(ctx context.Context, output chan<- pipeline.Data) error {
 	log := logger.InitLogger("csv_reader")
 
-	// Check if file exists before attempting to open
-	fileInfo, statErr := os.Stat(c.filePath)
-	if statErr != nil {
-		log.Error().
-			Err(statErr).
-			Str("component_id", c.config.ID).
-			Str("file_path", c.filePath).
-			Msg("CSVReader: File stat failed - file may not exist or is inaccessible")
-		return fmt.Errorf("file stat failed for %s: %w", c.filePath, statErr)
-	}
-	log.Info().
-		Str("component_id", c.config.ID).
-		Str("file_path", c.filePath).
-		Int64("file_size_bytes", fileInfo.Size()).
-		Str("file_modified", fileInfo.ModTime().Format(time.RFC3339)).
-		Msg("CSVReader: Opening file")
-
 	// Open the CSV file
 	file, err := os.Open(c.filePath)
 	if err != nil {
-		log.Error().
-			Err(err).
-			Str("component_id", c.config.ID).
-			Str("file_path", c.filePath).
-			Msg("CSVReader: Failed to open file")
+		log.Error().Err(err).Msg("CSVReader: Failed to open file")
 		return fmt.Errorf("failed to open file: %w", err)
 	}
 	defer file.Close()
@@ -214,32 +196,17 @@ func (c *CSVReaderComponent) readAndSend(ctx context.Context, output chan<- pipe
 	reader := csv.NewReader(file)
 	reader.Comma = c.delimiter
 	reader.TrimLeadingSpace = true
-	log.Debug().
-		Str("component_id", c.config.ID).
-		Str("delimiter", string(c.delimiter)).
-		Msg("CSVReader: CSV reader created")
+	reader.LazyQuotes = c.lazyQuotes
+	reader.FieldsPerRecord = c.fieldsPerRecord
 
 	// Read header if present
 	var headers []string
 	if c.hasHeader {
 		headers, err = reader.Read()
 		if err != nil {
-			log.Error().
-				Err(err).
-				Str("component_id", c.config.ID).
-				Str("file_path", c.filePath).
-				Msg("CSVReader: Failed to read CSV header row")
+			log.Error().Err(err).Msg("CSVReader: Failed to read header")
 			return fmt.Errorf("failed to read header: %w", err)
 		}
-		log.Info().
-			Str("component_id", c.config.ID).
-			Int("header_count", len(headers)).
-			Strs("headers", headers).
-			Msg("CSVReader: Headers read successfully")
-	} else {
-		log.Info().
-			Str("component_id", c.config.ID).
-			Msg("CSVReader: No header row configured, using column indices")
 	}
 
 	// Read and send rows one by one
@@ -251,11 +218,9 @@ func (c *CSVReaderComponent) readAndSend(ctx context.Context, output chan<- pipe
 		select {
 		case <-ctx.Done():
 			log.Warn().
-				Str("component_id", c.config.ID).
 				Int("rows_processed", rowNumber).
 				Int("errors_encountered", errorCount).
-				Err(ctx.Err()).
-				Msg("CSVReader: Context cancelled during read loop")
+				Msg("CSVReader: Context cancelled")
 			return ctx.Err()
 		default:
 		}
@@ -263,36 +228,31 @@ func (c *CSVReaderComponent) readAndSend(ctx context.Context, output chan<- pipe
 		record, err := reader.Read()
 		if err == io.EOF {
 			log.Info().
-				Str("component_id", c.config.ID).
 				Int("total_rows", rowNumber).
 				Int("errors_encountered", errorCount).
-				Str("file_path", c.filePath).
-				Msg("CSVReader: Finished reading all rows")
+				Msg("CSVReader: Finished reading file")
 			break
 		}
 		if err != nil {
 			errorCount++
 			log.Error().
 				Err(err).
-				Str("component_id", c.config.ID).
-				Str("file_path", c.filePath).
 				Int("row_number", rowNumber+1).
-				Int("errors_so_far", errorCount).
-				Msg("CSVReader: Failed to read CSV row")
+				Msg("CSVReader: Failed to read row")
+
+			// If skip_malformed_rows is enabled, log and continue
+			if c.skipMalformedRows {
+				log.Warn().
+					Int("row_number", rowNumber+1).
+					Msg("CSVReader: Skipping malformed row")
+				continue
+			}
+
+			// Otherwise, fail
 			return fmt.Errorf("failed to read row %d: %w", rowNumber+1, err)
 		}
 
 		rowNumber++
-
-		// Validate column count against headers
-		if c.hasHeader && len(headers) > 0 && len(record) != len(headers) {
-			log.Warn().
-				Str("component_id", c.config.ID).
-				Int("row_number", rowNumber).
-				Int("expected_columns", len(headers)).
-				Int("actual_columns", len(record)).
-				Msg("CSVReader: Column count mismatch in row")
-		}
 
 		// Create row map
 		var rowMap map[string]any
@@ -318,9 +278,7 @@ func (c *CSVReaderComponent) readAndSend(ctx context.Context, output chan<- pipe
 			errorCount++
 			log.Error().
 				Err(err).
-				Str("component_id", c.config.ID).
 				Int("row_number", rowNumber).
-				Int("record_fields", len(record)).
 				Msg("CSVReader: Failed to marshal row to JSON")
 			return fmt.Errorf("failed to marshal row %d to JSON: %w", rowNumber, err)
 		}
@@ -343,18 +301,11 @@ func (c *CSVReaderComponent) readAndSend(ctx context.Context, output chan<- pipe
 		// Send data to output channel
 		select {
 		case output <- data:
-			log.Debug().
-				Str("component_id", c.config.ID).
-				Int("row_number", rowNumber).
-				Int("payload_bytes", len(jsonData)).
-				Msg("CSVReader: Row sent to output channel")
+			// Row sent successfully (no logging for each row)
 		case <-ctx.Done():
 			log.Warn().
-				Str("component_id", c.config.ID).
 				Int("row_number", rowNumber).
-				Int("rows_sent", rowNumber-1).
-				Err(ctx.Err()).
-				Msg("CSVReader: Context cancelled while sending row to output channel")
+				Msg("CSVReader: Context cancelled while sending row")
 			return ctx.Err()
 		}
 	}
@@ -394,18 +345,9 @@ func (c *CSVReaderComponent) Config() pipeline.ComponentConfig {
 // moveToArchiveFolder moves the CSV file to the archive folder with timestamp
 func (c *CSVReaderComponent) moveToArchiveFolder() error {
 	log := logger.InitLogger("csv_reader")
-	log.Info().
-		Str("component_id", c.config.ID).
-		Str("file_path", c.filePath).
-		Str("archive_folder", c.archiveFolder).
-		Msg("CSVReader: Moving file to archive folder")
 
 	if err := os.MkdirAll(c.archiveFolder, 0755); err != nil {
-		log.Error().
-			Err(err).
-			Str("component_id", c.config.ID).
-			Str("archive_folder", c.archiveFolder).
-			Msg("CSVReader: Failed to create archive folder")
+		log.Error().Err(err).Msg("CSVReader: Failed to create archive folder")
 		return fmt.Errorf("failed to create archive folder: %w", err)
 	}
 
@@ -416,44 +358,20 @@ func (c *CSVReaderComponent) moveToArchiveFolder() error {
 	newFileName := fmt.Sprintf("%s_archive_%s%s", fileNameWithoutExt, timestamp, fileExt)
 	newFilePath := filepath.Join(c.archiveFolder, newFileName)
 
-	log.Debug().
-		Str("component_id", c.config.ID).
-		Str("source", c.filePath).
-		Str("destination", newFilePath).
-		Msg("CSVReader: Renaming file for archive")
-
 	if err := os.Rename(c.filePath, newFilePath); err != nil {
-		log.Error().
-			Err(err).
-			Str("component_id", c.config.ID).
-			Str("source", c.filePath).
-			Str("destination", newFilePath).
-			Msg("CSVReader: Failed to move file to archive")
+		log.Error().Err(err).Msg("CSVReader: Failed to move file to archive")
 		return fmt.Errorf("failed to move file to archive: %w", err)
 	}
 
-	log.Info().
-		Str("component_id", c.config.ID).
-		Str("archived_as", newFileName).
-		Msg("CSVReader: File archived successfully")
 	return nil
 }
 
 // moveToErrorFolder moves the CSV file to the error folder with timestamp
 func (c *CSVReaderComponent) moveToErrorFolder() error {
 	log := logger.InitLogger("csv_reader")
-	log.Info().
-		Str("component_id", c.config.ID).
-		Str("file_path", c.filePath).
-		Str("error_folder", c.errorFolder).
-		Msg("CSVReader: Moving file to error folder")
 
 	if err := os.MkdirAll(c.errorFolder, 0755); err != nil {
-		log.Error().
-			Err(err).
-			Str("component_id", c.config.ID).
-			Str("error_folder", c.errorFolder).
-			Msg("CSVReader: Failed to create error folder")
+		log.Error().Err(err).Msg("CSVReader: Failed to create error folder")
 		return fmt.Errorf("failed to create error folder: %w", err)
 	}
 
@@ -464,25 +382,10 @@ func (c *CSVReaderComponent) moveToErrorFolder() error {
 	newFileName := fmt.Sprintf("%s_error_%s%s", fileNameWithoutExt, timestamp, fileExt)
 	newFilePath := filepath.Join(c.errorFolder, newFileName)
 
-	log.Debug().
-		Str("component_id", c.config.ID).
-		Str("source", c.filePath).
-		Str("destination", newFilePath).
-		Msg("CSVReader: Renaming file for error folder")
-
 	if err := os.Rename(c.filePath, newFilePath); err != nil {
-		log.Error().
-			Err(err).
-			Str("component_id", c.config.ID).
-			Str("source", c.filePath).
-			Str("destination", newFilePath).
-			Msg("CSVReader: Failed to move file to error folder")
+		log.Error().Err(err).Msg("CSVReader: Failed to move file to error folder")
 		return fmt.Errorf("failed to move file to error folder: %w", err)
 	}
 
-	log.Info().
-		Str("component_id", c.config.ID).
-		Str("error_file", newFileName).
-		Msg("CSVReader: File moved to error folder successfully")
 	return nil
 }
