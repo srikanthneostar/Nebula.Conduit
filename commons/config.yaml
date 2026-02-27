@@ -8,11 +8,31 @@ auth:
 
 tls_config:
   enabled: true
-  cert_file: "commons/cert.pem"
-  key_file: "commons/key.pem"
+  cert_file: "C:\\Nebula.Conduit\\commons\\cert.pem"
+  key_file: "C:\\Nebula.Conduit\\commons\\key.pem"
 
 database:
   path: "Nebula.Conduit.db"
+
+# MongoDB for backpressure queue (optional - used when components need queuing)
+mongodb:
+  enabled: false
+  connection_string: "mongodb://sa:Nebula=2020@192.168.1.240:27017/"
+  database_name: "nebula_conduit"
+  username: "sa"
+  password: "Nebula=2020"
+  # Queue collections are created per component automatically
+
+# Cloud storage configuration (optional - for S3, MinIO, Azure Blob Storage)
+storage:
+  type: "local"  # Options: "local", "s3", "minio", "azure"
+  endpoint: ""   # For S3/MinIO (e.g., "s3.amazonaws.com" or "http://localhost:9000")
+  bucket: ""     # Storage bucket/container name
+  region: "us-east-1"  # AWS region
+  access_key: "" # Access key/username
+  secret_key: "" # Secret key/password
+  account_name: "" # Azure account name
+  account_key: "" # Azure account key
 
 paths:
   python_scripts_home: "/opt/venv/lib/python3.12/site-packages/algorithms"

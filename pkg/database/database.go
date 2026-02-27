@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Xecutables/Nebula.Conduit/pkg/logger"
+	"github.com/Xecutables/Nebula.Conduit/pkg/pipeline"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -63,6 +64,15 @@ func InitDB(path string) (*sql.DB, error) {
 	}
 
 	return db, nil
+}
+
+// InitMongoDB initializes MongoDB connection if enabled
+func InitMongoDB(connectionString, dbName, username, password string) (*pipeline.MongoDBQueue, error) {
+	if connectionString == "" {
+		return nil, nil
+	}
+
+	return pipeline.NewMongoDBQueue(connectionString, dbName, username, password)
 }
 
 // applyMigrations applies all pending migrations in order

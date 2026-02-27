@@ -22,6 +22,7 @@ import (
 	"github.com/Xecutables/Nebula.Conduit/internal/auth"
 	"github.com/Xecutables/Nebula.Conduit/internal/models"
 	"github.com/Xecutables/Nebula.Conduit/internal/task"
+	"github.com/Xecutables/Nebula.Conduit/pkg/database"
 	"github.com/Xecutables/Nebula.Conduit/pkg/executor"
 	"github.com/Xecutables/Nebula.Conduit/pkg/pipeline"
 	"github.com/Xecutables/Nebula.Conduit/pkg/pipeline/components"
@@ -191,6 +192,24 @@ func NewServer(db *sql.DB, cfg *config.Config) *Server {
 	executor := executor.NewPythonExecutor(taskRepo, cfg.GetPathConfig(), 1*time.Hour)
 	s.taskService = task.NewTaskService(taskRepo, executor, validator)
 
+	// Initialize MongoDB queue for backpressure (optional)
+	var mongoQueue *pipeline.MongoDBQueue
+	if cfg.MongoDB.Enabled && cfg.MongoDB.ConnectionString != "" {
+		log.Info().Str("connection_string", cfg.MongoDB.ConnectionString).Msg("Initializing MongoDB queue for backpressure")
+		var err error
+		mongoQueue, err = database.InitMongoDB(
+			cfg.MongoDB.ConnectionString,
+			cfg.MongoDB.DatabaseName,
+			cfg.MongoDB.Username,
+			cfg.MongoDB.Password,
+		)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to initialize MongoDB queue")
+		} else {
+			log.Info().Msg("MongoDB queue initialized successfully")
+		}
+	}
+
 	// Initialize pipeline engine
 	pipelineFactory := pipeline.NewComponentFactory()
 	components.RegisterComponents(pipelineFactory)
@@ -201,7 +220,14 @@ func NewServer(db *sql.DB, cfg *config.Config) *Server {
 		MaxGoroutinesPerInstance:  50,
 		ExecutionHistoryRetention: 30,
 	}
-	s.pipelineEngine = pipeline.NewPipelineEngine(db, pipelineRepo, pipelineFactory, nil, &log.Logger, pipelineMetrics, pipelineConfig)
+
+	// Create backpressure system with MongoDB queue
+	var backpressure pipeline.BackpressureSystem
+	if mongoQueue != nil {
+		backpressure = pipeline.NewQueueBackpressureSystem(mongoQueue)
+	}
+
+	s.pipelineEngine = pipeline.NewPipelineEngine(db, pipelineRepo, pipelineFactory, backpressure, &log.Logger, pipelineMetrics, pipelineConfig)
 
 	// Initialize the pipeline engine to start scheduler and load active pipelines
 	if err := s.pipelineEngine.Initialize(context.Background()); err != nil {

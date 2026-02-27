@@ -21,6 +21,25 @@ type Config struct {
 		Path string `mapstructure:"PATH"`
 	} `mapstructure:"database"`
 
+	MongoDB struct {
+		Enabled          bool   `mapstructure:"enabled"`
+		ConnectionString string `mapstructure:"connection_string"`
+		DatabaseName     string `mapstructure:"database_name"`
+		Username         string `mapstructure:"username"`
+		Password         string `mapstructure:"password"`
+	} `mapstructure:"mongodb"`
+
+	Storage struct {
+		Type        string `mapstructure:"type"`
+		Endpoint    string `mapstructure:"endpoint"`
+		Bucket      string `mapstructure:"bucket"`
+		Region      string `mapstructure:"region"`
+		AccessKey   string `mapstructure:"access_key"`
+		SecretKey   string `mapstructure:"secret_key"`
+		AccountName string `mapstructure:"account_name"`
+		AccountKey  string `mapstructure:"account_key"`
+	} `mapstructure:"storage"`
+
 	TLSConfig struct {
 		Enabled  bool   `mapstructure:"enabled"`
 		CertFile string `mapstructure:"cert_file"`

@@ -14,6 +14,9 @@ func RegisterComponents(factory pipeline.ComponentFactory) {
 	factory.Register(pipeline.ComponentTypeKafkaConsumer, NewKafkaConsumerComponent)
 	factory.Register(pipeline.ComponentTypeRabbitMQConsumer, NewRabbitMQConsumerComponent)
 	factory.Register(pipeline.ComponentTypeHL7Reader, NewHL7ReaderComponent)
+	factory.Register(pipeline.ComponentTypeS3Reader, NewS3ReaderComponent)
+	factory.Register(pipeline.ComponentTypeAzureBlobReader, NewAzureBlobReaderComponent)
+	factory.Register(pipeline.ComponentTypeLocalStorageReader, NewLocalStorageReaderComponent)
 
 	// Processor components
 	factory.Register(pipeline.ComponentTypeLog, NewLogComponent)
@@ -26,4 +29,7 @@ func RegisterComponents(factory pipeline.ComponentFactory) {
 	factory.Register(pipeline.ComponentTypeKafkaProducer, NewKafkaProducerComponent)
 	factory.Register(pipeline.ComponentTypeRabbitMQProducer, NewRabbitMQProducerComponent)
 	factory.Register(pipeline.ComponentTypeLogSink, NewLogSinkComponent)
+	factory.Register(pipeline.ComponentTypeS3Writer, NewS3WriterComponent)
+	factory.Register(pipeline.ComponentTypeAzureBlobWriter, NewAzureBlobWriterComponent)
+	factory.Register(pipeline.ComponentTypeLocalStorageWriter, NewLocalStorageWriterComponent)
 }

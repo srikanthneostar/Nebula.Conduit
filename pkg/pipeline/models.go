@@ -37,13 +37,16 @@ type ComponentType string
 
 const (
 	// Source components
-	ComponentTypeHTTPGet          ComponentType = "http_get"
-	ComponentTypeSQLQuery         ComponentType = "sql_query"
-	ComponentTypeCSVReader        ComponentType = "csv_reader"
-	ComponentTypeKafkaConsumer    ComponentType = "kafka_consumer"
-	ComponentTypeRabbitMQConsumer ComponentType = "rabbitmq_consumer"
-	ComponentTypeHL7Reader        ComponentType = "hl7_reader"
-	ComponentTypeTCPRead          ComponentType = "tcp_read"
+	ComponentTypeHTTPGet            ComponentType = "http_get"
+	ComponentTypeSQLQuery           ComponentType = "sql_query"
+	ComponentTypeCSVReader          ComponentType = "csv_reader"
+	ComponentTypeKafkaConsumer      ComponentType = "kafka_consumer"
+	ComponentTypeRabbitMQConsumer   ComponentType = "rabbitmq_consumer"
+	ComponentTypeHL7Reader          ComponentType = "hl7_reader"
+	ComponentTypeTCPRead            ComponentType = "tcp_read"
+	ComponentTypeS3Reader           ComponentType = "s3_reader"
+	ComponentTypeAzureBlobReader    ComponentType = "azure_blob_reader"
+	ComponentTypeLocalStorageReader ComponentType = "local_storage_reader"
 
 	// Processor components
 	ComponentTypePythonCodeBlock ComponentType = "python_code_block"
@@ -51,11 +54,14 @@ const (
 	ComponentTypeAttributeUpdate ComponentType = "attribute_update"
 
 	// Sink components
-	ComponentTypeHTTPPost         ComponentType = "http_post"
-	ComponentTypeKafkaProducer    ComponentType = "kafka_producer"
-	ComponentTypeRabbitMQProducer ComponentType = "rabbitmq_producer"
-	ComponentTypeTCPWrite         ComponentType = "tcp_write"
-	ComponentTypeLogSink          ComponentType = "log_sink"
+	ComponentTypeHTTPPost           ComponentType = "http_post"
+	ComponentTypeKafkaProducer      ComponentType = "kafka_producer"
+	ComponentTypeRabbitMQProducer   ComponentType = "rabbitmq_producer"
+	ComponentTypeTCPWrite           ComponentType = "tcp_write"
+	ComponentTypeLogSink            ComponentType = "log_sink"
+	ComponentTypeS3Writer           ComponentType = "s3_writer"
+	ComponentTypeAzureBlobWriter    ComponentType = "azure_blob_writer"
+	ComponentTypeLocalStorageWriter ComponentType = "local_storage_writer"
 )
 
 // Data represents the payload passed between components

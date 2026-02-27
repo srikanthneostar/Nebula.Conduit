@@ -146,6 +146,16 @@ func (e *PipelineEngine) Shutdown(ctx context.Context) error {
 	}
 
 	e.logger.Info().Msg("Pipeline engine shut down successfully")
+
+	// Close backpressure resources
+	if e.backpressure != nil {
+		if closer, ok := e.backpressure.(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil {
+				e.logger.Error().Err(err).Msg("Failed to close backpressure resources")
+			}
+		}
+	}
+
 	return nil
 }
 
