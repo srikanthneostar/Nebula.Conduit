@@ -28,15 +28,30 @@ func ValidateGraph(def PipelineDefinition) error {
 
 // validateComponentPresence ensures at least one source and one sink component exist
 func validateComponentPresence(def PipelineDefinition) error {
-	hasSource := false
-	hasSink := false
+	// Build a map of components with incoming connections
+	hasIncoming := make(map[string]bool)
+	hasOutgoing := make(map[string]bool)
 
+	for _, conn := range def.Connections {
+		hasOutgoing[conn.SourceComponentID] = true
+		hasIncoming[conn.TargetComponentID] = true
+	}
+
+	// Check for at least one component without incoming connections (topology source)
+	hasSource := false
 	for _, comp := range def.Components {
-		if isSourceComponent(comp.Type) {
+		if !hasIncoming[comp.ID] {
 			hasSource = true
+			break
 		}
-		if isSinkComponent(comp.Type) {
+	}
+
+	// Check for at least one component without outgoing connections (topology sink)
+	hasSink := false
+	for _, comp := range def.Components {
+		if !hasOutgoing[comp.ID] {
 			hasSink = true
+			break
 		}
 	}
 
@@ -126,24 +141,19 @@ func validateTypeCompatibility(def PipelineDefinition) error {
 
 // validateComponentConnection checks if two components can be connected
 func validateComponentConnection(source, target ComponentConfig) error {
-	// Sink components cannot be sources in connections
+	// Only strict sink components (those that truly can't output) cannot have outgoing connections
 	if isSinkComponent(source.Type) {
 		return fmt.Errorf("sink component %s (%s) cannot have outgoing connections",
 			source.ID, source.Type)
 	}
 
-	// Source components cannot be targets in connections (except processors can follow sources)
+	// Only strict source components (those that truly can't accept input) cannot have incoming connections
 	if isSourceComponent(target.Type) {
 		return fmt.Errorf("source component %s (%s) cannot have incoming connections",
 			target.ID, target.Type)
 	}
 
-	// All other combinations are valid:
-	// - Source -> Processor
-	// - Source -> Sink
-	// - Processor -> Processor
-	// - Processor -> Sink
-
+	// All other combinations are valid (processors can connect to anything)
 	return nil
 }
 
@@ -167,8 +177,7 @@ func buildAdjacencyList(def PipelineDefinition) map[string][]string {
 // isSourceComponent returns true if the component type is a source
 func isSourceComponent(compType ComponentType) bool {
 	switch compType {
-	case ComponentTypeHTTPGet,
-		ComponentTypeSQLQuery,
+	case ComponentTypeSQLQuery,
 		ComponentTypeCSVReader,
 		ComponentTypeKafkaConsumer,
 		ComponentTypeRabbitMQConsumer,
@@ -183,8 +192,7 @@ func isSourceComponent(compType ComponentType) bool {
 // isSinkComponent returns true if the component type is a sink
 func isSinkComponent(compType ComponentType) bool {
 	switch compType {
-	case ComponentTypeHTTPPost,
-		ComponentTypeKafkaProducer,
+	case ComponentTypeKafkaProducer,
 		ComponentTypeRabbitMQProducer,
 		ComponentTypeTCPWrite,
 		ComponentTypeLogSink:

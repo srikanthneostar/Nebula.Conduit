@@ -37,7 +37,6 @@ type ComponentType string
 
 const (
 	// Source components
-	ComponentTypeHTTPGet            ComponentType = "http_get"
 	ComponentTypeSQLQuery           ComponentType = "sql_query"
 	ComponentTypeCSVReader          ComponentType = "csv_reader"
 	ComponentTypeKafkaConsumer      ComponentType = "kafka_consumer"
@@ -53,9 +52,10 @@ const (
 	ComponentTypePythonCodeBlock ComponentType = "python_code_block"
 	ComponentTypeLog             ComponentType = "log"
 	ComponentTypeAttributeUpdate ComponentType = "attribute_update"
+	ComponentTypeHTTPPost        ComponentType = "http_post"
+	ComponentTypeHTTPGet         ComponentType = "http_get"
 
 	// Sink components
-	ComponentTypeHTTPPost           ComponentType = "http_post"
 	ComponentTypeKafkaProducer      ComponentType = "kafka_producer"
 	ComponentTypeRabbitMQProducer   ComponentType = "rabbitmq_producer"
 	ComponentTypeTCPWrite           ComponentType = "tcp_write"
