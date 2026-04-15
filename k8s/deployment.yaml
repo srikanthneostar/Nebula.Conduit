@@ -37,6 +37,9 @@ spec:
         ports:
         - containerPort: 8080
         imagePullPolicy: Always
+        envFrom:
+        - configMapRef:
+            name: nebula-conduit-s3-config
         env:
         - name: TZ
           value: Asia/Kolkata

@@ -23,6 +23,7 @@ func RegisterComponents(factory pipeline.ComponentFactory) {
 	factory.Register(pipeline.ComponentTypeLog, NewLogComponent)
 	factory.Register(pipeline.ComponentTypePythonCodeBlock, NewPythonCodeBlockComponent)
 	factory.Register(pipeline.ComponentTypeAttributeUpdate, NewAttributeUpdateComponent)
+	factory.Register(pipeline.ComponentTypeLychgateResponse, NewLychgateResponseComponent)
 
 	// Sink components
 	factory.Register(pipeline.ComponentTypeHTTPPost, NewHTTPPostComponent)

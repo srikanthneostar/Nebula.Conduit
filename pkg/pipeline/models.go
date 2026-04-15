@@ -49,11 +49,12 @@ const (
 	ComponentTypeLocalStorageReader ComponentType = "local_storage_reader"
 
 	// Processor components
-	ComponentTypePythonCodeBlock ComponentType = "python_code_block"
-	ComponentTypeLog             ComponentType = "log"
-	ComponentTypeAttributeUpdate ComponentType = "attribute_update"
-	ComponentTypeHTTPPost        ComponentType = "http_post"
-	ComponentTypeHTTPGet         ComponentType = "http_get"
+	ComponentTypePythonCodeBlock  ComponentType = "python_code_block"
+	ComponentTypeLog              ComponentType = "log"
+	ComponentTypeAttributeUpdate  ComponentType = "attribute_update"
+	ComponentTypeHTTPPost         ComponentType = "http_post"
+	ComponentTypeHTTPGet          ComponentType = "http_get"
+	ComponentTypeLychgateResponse ComponentType = "lychgate_response"
 
 	// Sink components
 	ComponentTypeKafkaProducer      ComponentType = "kafka_producer"

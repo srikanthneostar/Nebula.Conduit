@@ -43,6 +43,15 @@ type Config struct {
 	Log struct {
 		Level string `mapstructure:"LOGLEVEL"`
 	} `mapstructure:"setlog"`
+
+	S3 struct {
+		Endpoint  string `mapstructure:"S3_ENDPOINT"`
+		Bucket    string `mapstructure:"S3_BUCKET"`
+		UseSSL    string `mapstructure:"S3_USE_SSL"`
+		Region    string `mapstructure:"S3_REGION"`
+		AccessKey string `mapstructure:"S3_ACCESS_KEY"`
+		SecretKey string `mapstructure:"S3_SECRET_KEY"`
+	} `mapstructure:"s3"`
 }
 
 func LoadConfig(path string) (*Config, error) {
