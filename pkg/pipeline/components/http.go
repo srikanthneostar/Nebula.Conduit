@@ -190,8 +190,11 @@ func (h *HTTPGetComponent) fetchAndSend(ctx context.Context, output chan<- pipel
 
 // fetchAndSendWithData performs HTTP GET with template variables from input data
 func (h *HTTPGetComponent) fetchAndSendWithData(ctx context.Context, inputData pipeline.Data, output chan<- pipeline.Data) error {
-	// Create HTTP request
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.url, nil)
+	// Resolve template variables in URL
+	resolvedURL := replaceTemplateVars(h.url, inputData.Metadata)
+
+	// Create HTTP request with resolved URL
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, resolvedURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}

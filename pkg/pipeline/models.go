@@ -55,6 +55,8 @@ const (
 	ComponentTypeHTTPPost         ComponentType = "http_post"
 	ComponentTypeHTTPGet          ComponentType = "http_get"
 	ComponentTypeLychgateResponse ComponentType = "lychgate_response"
+	ComponentTypeJSONExtractor    ComponentType = "json_extractor"
+	ComponentTypeJSONTransform    ComponentType = "json_transform"
 
 	// Sink components
 	ComponentTypeKafkaProducer      ComponentType = "kafka_producer"
