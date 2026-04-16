@@ -2,6 +2,7 @@ package components
 
 import (
 	"github.com/Xecutables/Nebula.Conduit/pkg/pipeline"
+	"github.com/Xecutables/Nebula.Conduit/pkg/pipeline/components/lychgate"
 )
 
 // RegisterComponents registers all available component types with the factory
@@ -23,7 +24,7 @@ func RegisterComponents(factory pipeline.ComponentFactory) {
 	factory.Register(pipeline.ComponentTypeLog, NewLogComponent)
 	factory.Register(pipeline.ComponentTypePythonCodeBlock, NewPythonCodeBlockComponent)
 	factory.Register(pipeline.ComponentTypeAttributeUpdate, NewAttributeUpdateComponent)
-	factory.Register(pipeline.ComponentTypeLychgateResponse, NewLychgateResponseComponent)
+	factory.Register(pipeline.ComponentTypeLychgateResponse, lychgate.NewLychgateResponseComponent)
 
 	// Sink components
 	factory.Register(pipeline.ComponentTypeHTTPPost, NewHTTPPostComponent)
