@@ -118,6 +118,22 @@ func ValidateComponentConfig(config ComponentConfig) error {
 		return validateLogSinkConfig(config)
 	case ComponentTypeAttributeUpdate:
 		return validateAttributeUpdateConfig(config)
+	case ComponentTypeJSONExtractor:
+		return nil // validated at construction time
+	case ComponentTypeJSONTransform:
+		return nil // validated at construction time
+	case ComponentTypePrintLog:
+		return validatePrintLogConfig(config)
+	case ComponentTypeLychgateResponse:
+		return nil // validated at construction time
+	case ComponentTypeS3Reader, ComponentTypeS3Writer:
+		return nil // validated at construction time
+	case ComponentTypeMinIOReader, ComponentTypeMinIOWriter:
+		return nil // validated at construction time
+	case ComponentTypeAzureBlobReader, ComponentTypeAzureBlobWriter:
+		return nil // validated at construction time
+	case ComponentTypeLocalStorageReader, ComponentTypeLocalStorageWriter:
+		return nil // validated at construction time
 	default:
 		return fmt.Errorf("unknown component type: %s", config.Type)
 	}
@@ -714,5 +730,16 @@ func validateAttributeUpdateConfig(config ComponentConfig) error {
 		}
 	}
 
+	return nil
+}
+
+// validatePrintLogConfig validates Print Log component configuration
+func validatePrintLogConfig(config ComponentConfig) error {
+	if ll, ok := config.Parameters["log_level"].(string); ok && ll != "" {
+		validLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
+		if !validLevels[ll] {
+			return fmt.Errorf("Print_Log_Component 'log_level' must be one of: debug, info, warn, error; got: %s", ll)
+		}
+	}
 	return nil
 }

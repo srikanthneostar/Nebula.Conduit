@@ -307,16 +307,22 @@ func TestIsSourceComponent(t *testing.T) {
 		compType ComponentType
 		expected bool
 	}{
-		{ComponentTypeHTTPGet, true},
 		{ComponentTypeSQLQuery, true},
 		{ComponentTypeCSVReader, true},
 		{ComponentTypeKafkaConsumer, true},
 		{ComponentTypeRabbitMQConsumer, true},
 		{ComponentTypeHL7Reader, true},
 		{ComponentTypeTCPRead, true},
+		{ComponentTypeS3Reader, true},
+		{ComponentTypeMinIOReader, true},
+		{ComponentTypeAzureBlobReader, true},
+		{ComponentTypeLocalStorageReader, true},
+		// Dual-mode components are NOT strict sources
+		{ComponentTypeHTTPGet, false},
 		{ComponentTypeHTTPPost, false},
 		{ComponentTypeLog, false},
 		{ComponentTypePythonCodeBlock, false},
+		{ComponentTypePrintLog, false},
 	}
 
 	for _, tt := range tests {
@@ -332,13 +338,21 @@ func TestIsSinkComponent(t *testing.T) {
 		compType ComponentType
 		expected bool
 	}{
-		{ComponentTypeHTTPPost, true},
 		{ComponentTypeKafkaProducer, true},
 		{ComponentTypeRabbitMQProducer, true},
 		{ComponentTypeTCPWrite, true},
+		{ComponentTypeLogSink, true},
+		{ComponentTypeLychgateResponse, true},
+		{ComponentTypeS3Writer, true},
+		{ComponentTypeMinIOWriter, true},
+		{ComponentTypeAzureBlobWriter, true},
+		{ComponentTypeLocalStorageWriter, true},
+		// Dual-mode components are NOT strict sinks
+		{ComponentTypeHTTPPost, false},
 		{ComponentTypeHTTPGet, false},
 		{ComponentTypeLog, false},
 		{ComponentTypePythonCodeBlock, false},
+		{ComponentTypePrintLog, false},
 	}
 
 	for _, tt := range tests {
@@ -356,8 +370,14 @@ func TestIsProcessorComponent(t *testing.T) {
 	}{
 		{ComponentTypeLog, true},
 		{ComponentTypePythonCodeBlock, true},
+		{ComponentTypeAttributeUpdate, true},
+		{ComponentTypeJSONExtractor, true},
+		{ComponentTypeJSONTransform, true},
+		{ComponentTypePrintLog, true},
+		// Dual-mode and other categories
 		{ComponentTypeHTTPGet, false},
 		{ComponentTypeHTTPPost, false},
+		{ComponentTypeLogSink, false},
 	}
 
 	for _, tt := range tests {

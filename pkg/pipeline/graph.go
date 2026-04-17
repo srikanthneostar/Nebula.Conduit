@@ -174,7 +174,8 @@ func buildAdjacencyList(def PipelineDefinition) map[string][]string {
 	return graph
 }
 
-// isSourceComponent returns true if the component type is a source
+// isSourceComponent returns true if the component type is a strict source
+// (cannot accept incoming connections)
 func isSourceComponent(compType ComponentType) bool {
 	switch compType {
 	case ComponentTypeSQLQuery,
@@ -182,20 +183,30 @@ func isSourceComponent(compType ComponentType) bool {
 		ComponentTypeKafkaConsumer,
 		ComponentTypeRabbitMQConsumer,
 		ComponentTypeHL7Reader,
-		ComponentTypeTCPRead:
+		ComponentTypeTCPRead,
+		ComponentTypeS3Reader,
+		ComponentTypeMinIOReader,
+		ComponentTypeAzureBlobReader,
+		ComponentTypeLocalStorageReader:
 		return true
 	default:
 		return false
 	}
 }
 
-// isSinkComponent returns true if the component type is a sink
+// isSinkComponent returns true if the component type is a strict sink
+// (cannot have outgoing connections)
 func isSinkComponent(compType ComponentType) bool {
 	switch compType {
 	case ComponentTypeKafkaProducer,
 		ComponentTypeRabbitMQProducer,
 		ComponentTypeTCPWrite,
-		ComponentTypeLogSink:
+		ComponentTypeLogSink,
+		ComponentTypeLychgateResponse,
+		ComponentTypeS3Writer,
+		ComponentTypeMinIOWriter,
+		ComponentTypeAzureBlobWriter,
+		ComponentTypeLocalStorageWriter:
 		return true
 	default:
 		return false
@@ -207,7 +218,10 @@ func isProcessorComponent(compType ComponentType) bool {
 	switch compType {
 	case ComponentTypePythonCodeBlock,
 		ComponentTypeLog,
-		ComponentTypeAttributeUpdate:
+		ComponentTypeAttributeUpdate,
+		ComponentTypeJSONExtractor,
+		ComponentTypeJSONTransform,
+		ComponentTypePrintLog:
 		return true
 	default:
 		return false

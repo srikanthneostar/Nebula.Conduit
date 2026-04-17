@@ -39,6 +39,8 @@ This document supplements the main [Component Development Guide](component-devel
     - [Azure Blob Writer](#azure-blob-writer-component)
     - [Local Storage Writer](#local-storage-writer-component)
 - [HTTP GET URL Template Resolution Fix](#http-get-url-template-resolution-fix)
+- [Lychgate Response Sink Reclassification](#lychgate-response-sink-reclassification)
+- [Pipeline Logs API](#pipeline-logs-api-print_log-component)
 - [Database Management](#database-management)
 - [Pipeline Execution Monitoring](#pipeline-execution-monitoring)
 - [GitLab CI/CD Integration](#gitlab-cicd-integration)
@@ -1069,20 +1071,122 @@ Requires Python to be installed on the host system.
 
 ---
 
-#### Lychgate Response Component
+#### Print Log Component
 
-**Type:** `lychgate_response`
-**Category:** Processor
-**File:** `pkg/pipeline/components/lychgate/lychgate_response.go`
+**Type:** `print_log`
+**Category:** Processor (pass-through)
+**File:** `pkg/pipeline/components/print_log.go`
+**Added:** April 2026
 
-Processes responses from the Lychgate integration system. Specialized component for Lychgate API workflows.
+Logs pipeline data to the database so it can be queried and displayed in the React frontend via the Pipeline Logs API. Also prints to stdout. Data passes through unchanged to downstream components.
+
+The executor automatically injects the `LogStore` into this component before execution via the `LogStoreInjectable` interface — no manual wiring needed.
+
+**Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `log_level` | string | no | `"info"` | Log level: `debug`, `info`, `warn`, `error` |
+| `message` | string | no | `""` | Optional message (supports `{{var}}` templates from metadata) |
+| `pipeline_id` | string | no | `""` | Pipeline ID for log grouping |
+
+**Stored Log Entry Fields:**
+- `id` - Unique log entry ID
+- `pipeline_id` - Pipeline that produced the log
+- `execution_id` - Execution run (from metadata if available)
+- `component_id` - The print_log component instance ID
+- `log_level` - debug/info/warn/error
+- `message` - Resolved message string
+- `payload` - Full data payload as string
+- `metadata` - Data metadata as JSON string
+- `trace_id` - Trace ID from the data
+- `created_at` - Timestamp
 
 **Pipeline Node Example:**
 ```json
 {
-  "id": "lychgate-resp",
-  "type": "lychgate_response",
-  "parameters": {}
+  "id": "frontend-log",
+  "type": "print_log",
+  "parameters": {
+    "log_level": "info",
+    "message": "Processing employee {{employee_name}}",
+    "pipeline_id": "frappe-sync-pipeline"
+  }
+}
+```
+
+**Pipeline Node Example (Minimal — just log everything):**
+```json
+{
+  "id": "debug-print",
+  "type": "print_log",
+  "parameters": {
+    "log_level": "debug"
+  }
+}
+```
+
+**Querying Logs from React Frontend:**
+```bash
+# All logs for a pipeline
+GET /api/v1/pipelines/{id}/logs?page=1&page_size=50
+
+# Filter by execution
+GET /api/v1/pipelines/{id}/logs?execution_id=exec-123
+
+# Filter by component
+GET /api/v1/pipelines/{id}/logs?component_id=frontend-log
+```
+
+**Response:**
+```json
+{
+  "logs": [
+    {
+      "id": "log-uuid-1",
+      "pipeline_id": "frappe-sync-pipeline",
+      "execution_id": "exec-123",
+      "component_id": "frontend-log",
+      "log_level": "info",
+      "message": "Processing employee John Doe",
+      "payload": "{\"employee_name\":\"John Doe\",\"status\":\"Active\"}",
+      "metadata": "{\"last_modified\":\"2026-04-15 14:22:00\"}",
+      "trace_id": "fetch-employees",
+      "created_at": "2026-04-17T10:30:00Z"
+    }
+  ],
+  "total": 150,
+  "page": 1,
+  "page_size": 50
+}
+```
+
+**React Integration Example:**
+```typescript
+// Add to pipelineClient.ts
+export interface PipelineLogEntry {
+  id: string;
+  pipeline_id: string;
+  execution_id?: string;
+  component_id: string;
+  log_level: string;
+  message?: string;
+  payload?: string;
+  metadata?: string;
+  trace_id?: string;
+  created_at: string;
+}
+
+// In PipelineClient class:
+async getPipelineLogs(pipelineId: string, page = 1, pageSize = 50, filters?: {
+  execution_id?: string;
+  component_id?: string;
+}): Promise<{ logs: PipelineLogEntry[]; total: number; page: number; page_size: number }> {
+  const response = await axios.get(`${API_BASE_URL}/api/v1/pipelines/${pipelineId}/logs`, {
+    headers: this.getHeaders(),
+    params: { page, page_size: pageSize, ...filters },
+  });
+  return response.data;
 }
 ```
 
@@ -1091,6 +1195,44 @@ Processes responses from the Lychgate integration system. Specialized component 
 ### Sink Components
 
 Sink components consume data and write it to external destinations. They are the terminal nodes of a pipeline.
+
+---
+
+#### Lychgate Response Component
+
+**Type:** `lychgate_response`
+**Category:** Sink
+**File:** `pkg/pipeline/components/lychgate/lychgate_response.go`
+
+Sends pipeline data to the Lychgate integration system via RabbitMQ, Kafka, or MQTT. Enriches data with Lychgate routing metadata (system_id, entity_id, schema_class) and publishes to the configured messaging broker. As a sink, it consumes data without forwarding downstream.
+
+**Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `system_id` | int | yes | - | Lychgate system identifier |
+| `entity_id` | int | yes | - | Lychgate entity identifier |
+| `schema_class` | string | yes | - | Schema class name |
+| `communication_mode` | string | yes | - | Messaging protocol: `"RabbitMQ"`, `"Kafka"`, `"MQTT"` |
+
+**Pipeline Node Example:**
+```json
+{
+  "id": "lychgate-sink",
+  "type": "lychgate_response",
+  "parameters": {
+    "system_id": 1,
+    "entity_id": 42,
+    "schema_class": "EmployeeSync",
+    "communication_mode": "RabbitMQ"
+  }
+}
+```
+
+**Notes:**
+- Downloads `vault.db` from S3 on first use (cached locally)
+- Reads broker connection details from the `app_configs` table in vault.db
+- Publishes to exchange `nebula.exchange` with topic `nebula.connector.lychgate.response`
 
 ---
 
@@ -1467,6 +1609,34 @@ http://api.example.com/resource?filters=[["modified",">","{{last_modified}}"]]
 
 ---
 
+## Lychgate Response Sink Reclassification
+
+**Changed:** April 2026
+**File:** `pkg/pipeline/components/lychgate/lychgate_response.go`
+
+The `lychgate_response` component has been reclassified from Processor to Sink. It sends data to external messaging systems (RabbitMQ, Kafka, MQTT) and does not need to forward data downstream. The `Execute` method now returns a `nil` output channel (sink pattern) instead of passing enriched data through.
+
+**Before (processor — forwarded data):**
+```go
+func (l *LychgateResponseComponent) Execute(...) (<-chan pipeline.Data, error) {
+    output := make(chan pipeline.Data, 100)
+    // ... enriched data sent to output channel
+    return output, nil
+}
+```
+
+**After (sink — consumes data):**
+```go
+func (l *LychgateResponseComponent) Execute(...) (<-chan pipeline.Data, error) {
+    // ... consumes data, publishes to broker
+    return nil, nil
+}
+```
+
+**Impact:** If you had `lychgate_response` in the middle of a pipeline with downstream components, it must now be a terminal node. Place any processing components (like `print_log` or `json_transform`) before it in the pipeline.
+
+---
+
 ## Database Management
 
 ### Foreign Key Constraints
@@ -1505,12 +1675,14 @@ http://api.example.com/resource?filters=[["modified",">","{{last_modified}}"]]
 - `pipeline_components` - Component configurations (CASCADE DELETE on pipeline deletion)
 - `pipeline_connections` - Component connections (CASCADE DELETE on pipeline deletion)
 - `pipeline_executions` - Execution history
+- `pipeline_logs` - Print log entries (queryable via API for React frontend)
 
 **Key Relationships:**
 ```
 pipelines (1) ---> (N) pipeline_components [CASCADE DELETE]
 pipelines (1) ---> (N) pipeline_connections [CASCADE DELETE]
 pipelines (1) ---> (N) pipeline_executions
+pipelines (1) ---> (N) pipeline_logs       [CASCADE DELETE]
 ```
 
 ---
@@ -1572,6 +1744,48 @@ GET /api/v1/pipelines/executions/{execution_id}
   "message": "Starting pipeline execution",
   "pipeline_id": "pipe-456",
   "pipeline_name": "CSV Processing"
+}
+```
+
+### Pipeline Logs API (print_log component)
+
+The `print_log` component writes log entries to the `pipeline_logs` database table. These are queryable via the REST API and designed to be displayed in the React frontend.
+
+**Get Pipeline Logs:**
+```bash
+GET /api/v1/pipelines/{pipeline_id}/logs?page=1&page_size=50
+```
+
+**Filter by Execution:**
+```bash
+GET /api/v1/pipelines/{pipeline_id}/logs?execution_id=exec-123
+```
+
+**Filter by Component:**
+```bash
+GET /api/v1/pipelines/{pipeline_id}/logs?component_id=frontend-log
+```
+
+**Response:**
+```json
+{
+  "logs": [
+    {
+      "id": "log-uuid-1",
+      "pipeline_id": "pipe-456",
+      "execution_id": "exec-123",
+      "component_id": "frontend-log",
+      "log_level": "info",
+      "message": "Processing employee John Doe",
+      "payload": "{\"employee_name\":\"John Doe\"}",
+      "metadata": "{\"last_modified\":\"2026-04-15 14:22:00\"}",
+      "trace_id": "fetch-employees",
+      "created_at": "2026-04-17T10:30:00Z"
+    }
+  ],
+  "total": 150,
+  "page": 1,
+  "page_size": 50
 }
 ```
 
@@ -1978,7 +2192,8 @@ func corsMiddleware(next http.Handler) http.Handler {
 | `json_extractor` | Processor | JSON array aggregation (max/min/first/last/count) to metadata |
 | `json_transform` | Processor | JSON field-level transformation (rename/remove/add/copy/map/convert/flatten) |
 | `python_code_block` | Processor | Inline Python code execution |
-| `lychgate_response` | Processor | Lychgate integration response handler |
+| `print_log` | Processor | Database-backed logger visible in React frontend |
+| `lychgate_response` | Sink | Lychgate integration via RabbitMQ/Kafka/MQTT |
 | `http_post` | Sink/Processor | HTTP POST with JWT extraction support |
 | `log_sink` | Sink | File-based log writer with dynamic paths |
 | `tcp_write` | Sink | TCP server/client writer |
@@ -2000,6 +2215,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 | DELETE | `/api/v1/pipelines/{id}` | Delete pipeline |
 | POST | `/api/v1/pipelines/{id}/trigger` | Trigger pipeline execution |
 | GET | `/api/v1/pipelines/{id}/executions` | Get execution history |
+| GET | `/api/v1/pipelines/{id}/logs` | Get pipeline logs (for React frontend) |
 
 ### Cron Expression Format
 
@@ -2026,6 +2242,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 | `pkg/pipeline/graph.go` | Pipeline graph validation |
 | `pkg/pipeline/helpers.go` | Parameter and data helpers |
 | `pkg/pipeline/executor.go` | Pipeline execution engine |
+| `pkg/pipeline/log_store.go` | Pipeline log storage for print_log component |
 | `pkg/pipeline/test_harness.go` | Component testing utilities |
 | `.gitlab-ci.yml` | CI/CD pipeline configuration |
 
@@ -2044,6 +2261,17 @@ func corsMiddleware(next http.Handler) http.Handler {
 ---
 
 ## Changelog
+
+### 2026-04-17
+
+- ✅ Reclassified `lychgate_response` from Processor to Sink (no longer forwards data downstream)
+- ✅ Added `print_log` component — database-backed logger queryable from the React frontend
+- ✅ Added `pipeline_logs` database table and `LogStore` interface (`pkg/pipeline/log_store.go`)
+- ✅ Added `LogStoreInjectable` interface for automatic dependency injection by the executor
+- ✅ Added `GET /api/v1/pipelines/{id}/logs` API endpoint with execution_id and component_id filters
+- ✅ Added `003_pipeline_logs.up.sql` migration
+- ✅ Updated Lychgate Response documentation with full parameter reference
+- ✅ Added React TypeScript integration example for pipeline logs
 
 ### 2026-04-16
 
@@ -2066,6 +2294,6 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 ---
 
-**Last Updated:** April 16, 2026
-**Version:** 3.0
+**Last Updated:** April 17, 2026
+**Version:** 4.0
 **Status:** Production Ready
