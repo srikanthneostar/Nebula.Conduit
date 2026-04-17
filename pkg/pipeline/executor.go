@@ -70,7 +70,7 @@ func (e *defaultExecutor) emitLog(ctx context.Context, pipelineID, executionID, 
 		Message:     message,
 	}
 	if err := e.logStore.InsertLog(ctx, entry); err != nil {
-		fmt.Printf("warning: failed to emit execution log: %v\n", err)
+		fmt.Printf("⚠ LOG_STORE_ERROR: failed to write log [%s/%s]: %v\n", componentID, message, err)
 	}
 }
 
@@ -90,7 +90,7 @@ func (e *defaultExecutor) emitDataLog(ctx context.Context, pipelineID, execution
 		TraceID:     data.TraceID,
 	}
 	if err := e.logStore.InsertLog(ctx, entry); err != nil {
-		fmt.Printf("warning: failed to emit data log: %v\n", err)
+		fmt.Printf("⚠ LOG_STORE_ERROR: failed to write data log [%s/%s]: %v\n", componentID, message, err)
 	}
 }
 

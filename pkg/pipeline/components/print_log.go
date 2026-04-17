@@ -144,3 +144,4 @@ func (p *PrintLogComponent) ID() string                       { return p.config.
 func (p *PrintLogComponent) Config() pipeline.ComponentConfig { return p.config }
 
 var _ pipeline.Component = (*PrintLogComponent)(nil)
+var _ pipeline.LogStoreInjectable = (*PrintLogComponent)(nil)
