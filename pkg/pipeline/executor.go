@@ -151,6 +151,7 @@ func (e *defaultExecutor) Execute(ctx context.Context, pipeline PipelineDefiniti
 		// Inject LogStore into components that support it (e.g. print_log)
 		if injectable, ok := component.(LogStoreInjectable); ok && e.logStore != nil {
 			injectable.SetLogStore(e.logStore)
+			injectable.SetPipelineContext(pipeline.ID, executionID)
 		}
 	}
 	fmt.Printf("✓ All components created and validated\n\n")

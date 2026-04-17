@@ -12,11 +12,12 @@ import (
 // so it can be queried and displayed in the React frontend.
 // Data passes through unchanged to downstream components.
 type PrintLogComponent struct {
-	config     pipeline.ComponentConfig
-	logLevel   string
-	message    string // optional static or template message
-	pipelineID string
-	logStore   pipeline.LogStore
+	config      pipeline.ComponentConfig
+	logLevel    string
+	message     string // optional static or template message
+	pipelineID  string
+	executionID string
+	logStore    pipeline.LogStore
 }
 
 // NewPrintLogComponent creates a new Print Log component.
@@ -36,22 +37,22 @@ func NewPrintLogComponent(config pipeline.ComponentConfig) (pipeline.Component, 
 		message = msg
 	}
 
-	pipelineID := ""
-	if pid, ok := config.Parameters["pipeline_id"].(string); ok {
-		pipelineID = pid
-	}
-
 	return &PrintLogComponent{
-		config:     config,
-		logLevel:   logLevel,
-		message:    message,
-		pipelineID: pipelineID,
+		config:   config,
+		logLevel: logLevel,
+		message:  message,
 	}, nil
 }
 
 // SetLogStore injects the LogStore dependency. Called by the executor before running.
 func (p *PrintLogComponent) SetLogStore(store pipeline.LogStore) {
 	p.logStore = store
+}
+
+// SetPipelineContext injects the pipeline ID and execution ID. Called by the executor.
+func (p *PrintLogComponent) SetPipelineContext(pipelineID, executionID string) {
+	p.pipelineID = pipelineID
+	p.executionID = executionID
 }
 
 // Execute logs each data item to the database and passes it through unchanged.
@@ -100,7 +101,7 @@ func (p *PrintLogComponent) logToStore(ctx context.Context, data pipeline.Data) 
 
 	entry := pipeline.PipelineLogEntry{
 		PipelineID:  p.pipelineID,
-		ExecutionID: data.Metadata["execution_id"],
+		ExecutionID: p.executionID,
 		ComponentID: p.config.ID,
 		LogLevel:    p.logLevel,
 		Message:     msg,

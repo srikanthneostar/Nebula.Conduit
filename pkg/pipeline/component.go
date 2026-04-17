@@ -43,7 +43,8 @@ type SinkComponent interface {
 }
 
 // LogStoreInjectable is implemented by components that need a LogStore
-// (e.g. print_log). The executor injects the store before execution.
+// (e.g. print_log). The executor injects the store and pipeline context before execution.
 type LogStoreInjectable interface {
 	SetLogStore(store LogStore)
+	SetPipelineContext(pipelineID, executionID string)
 }
