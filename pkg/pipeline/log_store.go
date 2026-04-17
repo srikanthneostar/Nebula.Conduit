@@ -140,7 +140,7 @@ func (s *defaultLogStore) DeleteOldLogs(ctx context.Context, retentionDays int) 
 }
 
 func scanLogRows(rows *sql.Rows, total int) ([]PipelineLogEntry, int, error) {
-	var entries []PipelineLogEntry
+	entries := make([]PipelineLogEntry, 0)
 	for rows.Next() {
 		var e PipelineLogEntry
 		var execID, message, payload, metadata, traceID sql.NullString

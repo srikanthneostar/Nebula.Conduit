@@ -10,7 +10,7 @@ func intPtr(v int) *int    { return &v }
 func boolPtr(v bool) *bool { return &v }
 
 func NewRequestPayload(systemId int, entityId int,
-	requestJson string, schemaClass string) *RequestPayload {
+	requestJson string, schemaClass *string) *RequestPayload {
 	msgID := uuid.New().String()
 	requestType := "EntityDataChange"
 	entiyType := "TOPICTABLE"
@@ -38,6 +38,6 @@ func NewRequestPayload(systemId int, entityId int,
 
 	return &RequestPayload{
 		SystemRequests: request,
-		SchemaClass:    &schemaClass,
+		SchemaClass:    schemaClass,
 	}
 }

@@ -127,7 +127,9 @@ func (h *HTTPGetComponent) Execute(ctx context.Context, input <-chan pipeline.Da
 			}
 		} else {
 			// One-time execution
-			_ = h.fetchAndSend(ctx, output)
+			if err := h.fetchAndSend(ctx, output); err != nil {
+				fmt.Printf("HTTPGet[%s]: fetch failed: %v\n", h.config.ID, err)
+			}
 		}
 	}()
 

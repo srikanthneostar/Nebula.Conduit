@@ -56,6 +56,44 @@ func (e *defaultExecutor) SetLogStore(store LogStore) {
 	e.logStore = store
 }
 
+// emitLog writes a structured log entry to the pipeline_logs table.
+// This is the framework-level logger — every step of every run is recorded here.
+func (e *defaultExecutor) emitLog(ctx context.Context, pipelineID, executionID, componentID, level, message string) {
+	if e.logStore == nil {
+		return
+	}
+	entry := PipelineLogEntry{
+		PipelineID:  pipelineID,
+		ExecutionID: executionID,
+		ComponentID: componentID,
+		LogLevel:    level,
+		Message:     message,
+	}
+	if err := e.logStore.InsertLog(ctx, entry); err != nil {
+		fmt.Printf("warning: failed to emit execution log: %v\n", err)
+	}
+}
+
+// emitDataLog writes a log entry that includes the data payload and metadata.
+func (e *defaultExecutor) emitDataLog(ctx context.Context, pipelineID, executionID, componentID, level, message string, data Data) {
+	if e.logStore == nil {
+		return
+	}
+	entry := PipelineLogEntry{
+		PipelineID:  pipelineID,
+		ExecutionID: executionID,
+		ComponentID: componentID,
+		LogLevel:    level,
+		Message:     message,
+		Payload:     PayloadToLogString(data.Payload),
+		Metadata:    MetadataToLogString(data.Metadata),
+		TraceID:     data.TraceID,
+	}
+	if err := e.logStore.InsertLog(ctx, entry); err != nil {
+		fmt.Printf("warning: failed to emit data log: %v\n", err)
+	}
+}
+
 // Execute runs a pipeline and returns the instance
 func (e *defaultExecutor) Execute(ctx context.Context, pipeline PipelineDefinition) (*PipelineInstance, error) {
 	fmt.Printf("\n========== PIPELINE EXECUTION STARTED ==========\n")
@@ -112,18 +150,22 @@ func (e *defaultExecutor) Execute(ctx context.Context, pipeline PipelineDefiniti
 	instanceCtx, cancel := context.WithCancel(ctx)
 
 	instance := &PipelineInstance{
-		ID:         instanceID,
-		PipelineID: pipeline.ID,
-		Status:     InstanceStatusRunning,
-		Components: make(map[string]Component),
-		Channels:   make(map[string]chan Data),
-		Context:    instanceCtx,
-		CancelFunc: cancel,
-		WaitGroup:  &sync.WaitGroup{},
-		StartedAt:  time.Now(),
+		ID:          instanceID,
+		PipelineID:  pipeline.ID,
+		ExecutionID: executionID,
+		Status:      InstanceStatusRunning,
+		Components:  make(map[string]Component),
+		Channels:    make(map[string]chan Data),
+		Context:     instanceCtx,
+		CancelFunc:  cancel,
+		WaitGroup:   &sync.WaitGroup{},
+		StartedAt:   time.Now(),
 	}
 
 	fmt.Printf("Step 2: Creating component instances...\n")
+	e.emitLog(ctx, pipeline.ID, executionID, "_pipeline", "info",
+		fmt.Sprintf("Pipeline execution started: %s (%d components, %d connections)",
+			pipeline.Name, len(pipeline.Components), len(pipeline.Connections)))
 
 	// Create component instances
 	for i, compConfig := range pipeline.Components {
@@ -133,7 +175,13 @@ func (e *defaultExecutor) Execute(ctx context.Context, pipeline PipelineDefiniti
 		if err != nil {
 			cancel()
 			fmt.Printf("  ERROR: Failed to create component %s: %v\n", compConfig.ID, err)
-			return nil, fmt.Errorf("failed to create component %s: %w", compConfig.ID, err)
+			createErr := fmt.Errorf("failed to create component %s: %w", compConfig.ID, err)
+			e.emitLog(ctx, pipeline.ID, executionID, compConfig.ID, "error",
+				fmt.Sprintf("Component creation failed: %v", err))
+			if e.recorder != nil && executionID != "" {
+				_ = e.recorder.EndExecution(ctx, executionID, InstanceStatusFailed, createErr)
+			}
+			return nil, createErr
 		}
 		fmt.Printf("  ✓ Component %s created successfully\n", compConfig.ID)
 
@@ -142,7 +190,13 @@ func (e *defaultExecutor) Execute(ctx context.Context, pipeline PipelineDefiniti
 		if err := component.Validate(); err != nil {
 			cancel()
 			fmt.Printf("  ERROR: Component %s validation failed: %v\n", compConfig.ID, err)
-			return nil, fmt.Errorf("component %s validation failed: %w", compConfig.ID, err)
+			valErr := fmt.Errorf("component %s validation failed: %w", compConfig.ID, err)
+			e.emitLog(ctx, pipeline.ID, executionID, compConfig.ID, "error",
+				fmt.Sprintf("Component validation failed: %v", err))
+			if e.recorder != nil && executionID != "" {
+				_ = e.recorder.EndExecution(ctx, executionID, InstanceStatusFailed, valErr)
+			}
+			return nil, valErr
 		}
 		fmt.Printf("  ✓ Component %s validated\n\n", compConfig.ID)
 
@@ -161,7 +215,11 @@ func (e *defaultExecutor) Execute(ctx context.Context, pipeline PipelineDefiniti
 	if err := e.setupChannels(instance, pipeline); err != nil {
 		cancel()
 		fmt.Printf("ERROR: Failed to setup channels: %v\n", err)
-		return nil, fmt.Errorf("failed to setup channels: %w", err)
+		chanErr := fmt.Errorf("failed to setup channels: %w", err)
+		if e.recorder != nil && executionID != "" {
+			_ = e.recorder.EndExecution(ctx, executionID, InstanceStatusFailed, chanErr)
+		}
+		return nil, chanErr
 	}
 	fmt.Printf("✓ Channels setup complete\n\n")
 
@@ -178,7 +236,11 @@ func (e *defaultExecutor) Execute(ctx context.Context, pipeline PipelineDefiniti
 		delete(e.instances, instanceID)
 		e.mu.Unlock()
 		fmt.Printf("ERROR: Failed to start components: %v\n", err)
-		return nil, fmt.Errorf("failed to start components: %w", err)
+		startErr := fmt.Errorf("failed to start components: %w", err)
+		if e.recorder != nil && executionID != "" {
+			_ = e.recorder.EndExecution(ctx, executionID, InstanceStatusFailed, startErr)
+		}
+		return nil, startErr
 	}
 	fmt.Printf("✓ All component goroutines started\n\n")
 
@@ -306,38 +368,42 @@ func (e *defaultExecutor) runComponent(
 	outputTargets []chan<- Data,
 	config ComponentConfig,
 ) {
+	compID := component.ID()
+	pipelineID := instance.PipelineID
+	execID := instance.ExecutionID
+	startTime := time.Now()
+
 	defer instance.WaitGroup.Done()
 	defer func() {
+		duration := time.Since(startTime)
 		if r := recover(); r != nil {
-			// Recover from panic and log it with stack trace
-			panicErr := fmt.Errorf("component %s panicked: %v", component.ID(), r)
+			panicErr := fmt.Errorf("component %s panicked: %v", compID, r)
 			instance.Error = panicErr
 			instance.Status = InstanceStatusFailed
-
-			// Log panic with stack trace (in production, use proper logger)
-			fmt.Printf("❌ PANIC in component %s: %v\n", component.ID(), r)
-			// In production, this would use zerolog with stack trace
-			// log.Error().Stack().Err(panicErr).Str("component_id", component.ID()).Msg("Component panicked")
+			e.emitLog(instance.Context, pipelineID, execID, compID, "error",
+				fmt.Sprintf("PANIC: %v (after %v)", r, duration))
+			fmt.Printf("❌ PANIC in component %s: %v\n", compID, r)
 		}
-		fmt.Printf("Component %s goroutine exiting\n", component.ID())
+		e.emitLog(instance.Context, pipelineID, execID, compID, "info",
+			fmt.Sprintf("Component finished (duration: %v)", duration))
+		fmt.Printf("Component %s goroutine exiting\n", compID)
 	}()
 
-	fmt.Printf("\n▶ Component %s goroutine STARTED\n", component.ID())
+	e.emitLog(instance.Context, pipelineID, execID, compID, "info",
+		fmt.Sprintf("Component started (type: %s)", config.Type))
+	fmt.Printf("\n▶ Component %s goroutine STARTED\n", compID)
 
 	// Create merged input channel if multiple inputs
 	var inputChan <-chan Data
 	if len(inputChans) == 0 {
-		// Source component - no input
 		inputChan = nil
-		fmt.Printf("  %s: No input channels (source component)\n", component.ID())
+		e.emitLog(instance.Context, pipelineID, execID, compID, "debug", "No input channels (source component)")
 	} else if len(inputChans) == 1 {
-		// Single input
 		inputChan = inputChans[0]
-		fmt.Printf("  %s: Single input channel\n", component.ID())
 	} else {
-		// Multiple inputs - merge them
 		inputChan = e.mergeChannels(instance.Context, inputChans)
-		fmt.Printf("  %s: Merged %d input channels\n", component.ID(), len(inputChans))
+		e.emitLog(instance.Context, pipelineID, execID, compID, "debug",
+			fmt.Sprintf("Merged %d input channels", len(inputChans)))
 	}
 
 	// Create component executor with retry logic
@@ -347,30 +413,31 @@ func (e *defaultExecutor) runComponent(
 	var err error
 	var componentOutput <-chan Data
 
-	// Handle different component types
+	// Determine execution mode and run
+	var execMode string
 	if _, ok := component.(SourceComponent); ok {
-		// Source component
-		fmt.Printf("  %s: Executing as SOURCE component\n", component.ID())
+		execMode = "SOURCE"
 		componentOutput, err = componentExecutor.ExecuteSource(instance.Context)
 	} else if _, ok := component.(ProcessorComponent); ok {
-		// Processor component
-		fmt.Printf("  %s: Executing as PROCESSOR component\n", component.ID())
+		execMode = "PROCESSOR"
 		componentOutput, err = componentExecutor.ExecuteProcessor(instance.Context, inputChan)
 	} else if _, ok := component.(SinkComponent); ok {
-		// Sink component
-		fmt.Printf("  %s: Executing as SINK component\n", component.ID())
+		execMode = "SINK"
 		err = componentExecutor.ExecuteSink(instance.Context, inputChan)
-		// Sinks don't produce output
 		componentOutput = nil
 	} else {
-		// Fallback to generic Execute with retry
-		fmt.Printf("  %s: Executing as GENERIC component\n", component.ID())
+		execMode = "GENERIC"
 		componentOutput, err = componentExecutor.Execute(instance.Context, inputChan)
 	}
 
+	e.emitLog(instance.Context, pipelineID, execID, compID, "debug",
+		fmt.Sprintf("Executing as %s component", execMode))
+
 	if err != nil {
-		fmt.Printf("❌ Component %s FAILED: %v\n", component.ID(), err)
-		instance.Error = fmt.Errorf("component %s failed: %w", component.ID(), err)
+		errMsg := fmt.Sprintf("Execution failed: %v", err)
+		e.emitLog(instance.Context, pipelineID, execID, compID, "error", errMsg)
+		fmt.Printf("❌ Component %s FAILED: %v\n", compID, err)
+		instance.Error = fmt.Errorf("component %s failed: %w", compID, err)
 		if !config.ContinueOnError {
 			instance.Status = InstanceStatusFailed
 			instance.CancelFunc()
@@ -378,39 +445,34 @@ func (e *defaultExecutor) runComponent(
 		return
 	}
 
-	fmt.Printf("  %s: Execution started successfully\n", component.ID())
+	e.emitLog(instance.Context, pipelineID, execID, compID, "info", "Execution started successfully")
 
-	// Handle component output and fanout
+	// Handle component output — wrap with data-flow logging
 	if componentOutput != nil {
+		// Wrap the output channel to log every data item passing through
+		loggedOutput := e.wrapWithDataLogging(instance.Context, pipelineID, execID, compID, componentOutput)
+
 		if len(outputTargets) > 1 {
-			// Fanout case: multiple targets
-			fmt.Printf("  %s: Fanning out to %d targets\n", component.ID(), len(outputTargets))
-			// Write to all target channels directly
-			e.fanOut(instance.Context, componentOutput, outputTargets)
-			// Close all target channels after fanout completes
-			for i, target := range outputTargets {
+			e.emitLog(instance.Context, pipelineID, execID, compID, "debug",
+				fmt.Sprintf("Fanning out to %d targets", len(outputTargets)))
+			e.fanOut(instance.Context, loggedOutput, outputTargets)
+			for _, target := range outputTargets {
 				close(target)
-				fmt.Printf("  %s: Closed target channel %d\n", component.ID(), i+1)
 			}
-			// Close own output channel (not used in fanout)
 			close(outputChan)
 		} else if len(outputTargets) == 1 {
-			// Single target: write to own channel, target will read from it
-			fmt.Printf("  %s: Forwarding output to single target\n", component.ID())
 			go func() {
 				defer close(outputChan)
 				for {
 					select {
 					case <-instance.Context.Done():
 						return
-					case data, ok := <-componentOutput:
+					case data, ok := <-loggedOutput:
 						if !ok {
-							fmt.Printf("  %s: Component output channel closed\n", component.ID())
 							return
 						}
 						select {
 						case outputChan <- data:
-							fmt.Printf("  %s: Forwarded data (TraceID: %s)\n", component.ID(), data.TraceID)
 						case <-instance.Context.Done():
 							return
 						}
@@ -418,21 +480,49 @@ func (e *defaultExecutor) runComponent(
 				}
 			}()
 		} else {
-			// No targets: just drain the output
-			fmt.Printf("  %s: No targets, draining output\n", component.ID())
 			go func() {
 				defer close(outputChan)
-				for range componentOutput {
-					// Drain to prevent blocking
+				for range loggedOutput {
 				}
 			}()
 		}
 	} else {
-		// No output from component (sink component)
-		fmt.Printf("  %s: No output (sink component completed)\n", component.ID())
-		// Don't close outputChan - it may have been closed by upstream fanout
-		// or it's not used at all
+		e.emitLog(instance.Context, pipelineID, execID, compID, "info", "Sink component completed — no output")
 	}
+}
+
+// wrapWithDataLogging creates an interceptor channel that logs each data item
+// flowing out of a component, then forwards it.
+func (e *defaultExecutor) wrapWithDataLogging(ctx context.Context, pipelineID, execID, compID string, input <-chan Data) <-chan Data {
+	if e.logStore == nil {
+		return input // no logging, pass through directly
+	}
+	output := make(chan Data, 100)
+	go func() {
+		defer close(output)
+		itemCount := 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case data, ok := <-input:
+				if !ok {
+					e.emitLog(ctx, pipelineID, execID, compID, "info",
+						fmt.Sprintf("Output complete — %d item(s) emitted", itemCount))
+					return
+				}
+				itemCount++
+				e.emitDataLog(ctx, pipelineID, execID, compID, "debug",
+					fmt.Sprintf("Data emitted (item #%d)", itemCount), data)
+				select {
+				case output <- data:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return output
 }
 
 // mergeChannels combines multiple input channels into one
@@ -510,18 +600,22 @@ func (e *defaultExecutor) monitorInstance(instance *PipelineInstance, executionI
 	// Update completion time and status
 	now := time.Now()
 	instance.CompletedAt = &now
+	duration := now.Sub(instance.StartedAt)
 
 	if instance.Status == InstanceStatusRunning {
 		if instance.Error != nil {
 			instance.Status = InstanceStatusFailed
+			e.emitLog(context.Background(), instance.PipelineID, instance.ExecutionID, "_pipeline", "error",
+				fmt.Sprintf("Pipeline FAILED: %v (duration: %v)", instance.Error, duration))
 			fmt.Printf("❌ Pipeline instance %s FAILED: %v\n", instance.ID, instance.Error)
 		} else {
 			instance.Status = InstanceStatusCompleted
+			e.emitLog(context.Background(), instance.PipelineID, instance.ExecutionID, "_pipeline", "info",
+				fmt.Sprintf("Pipeline COMPLETED successfully (duration: %v)", duration))
 			fmt.Printf("✅ Pipeline instance %s COMPLETED successfully\n", instance.ID)
 		}
 	}
 
-	duration := now.Sub(instance.StartedAt)
 	fmt.Printf("⏱ Execution duration: %v\n", duration)
 
 	// Record execution end

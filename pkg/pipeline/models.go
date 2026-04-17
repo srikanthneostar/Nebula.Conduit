@@ -113,6 +113,7 @@ type PipelineDefinition struct {
 type PipelineInstance struct {
 	ID          string
 	PipelineID  string
+	ExecutionID string
 	Status      InstanceStatus
 	Components  map[string]Component
 	Channels    map[string]chan Data

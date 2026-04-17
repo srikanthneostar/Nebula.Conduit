@@ -91,7 +91,7 @@ func NewLychgateResponseComponent(config pipeline.ComponentConfig) (pipeline.Com
 		return nil, fmt.Errorf("lychgate_response: parameter \"entity_id\" is required and must be non-zero")
 	}
 
-	schemaClass, err := pipeline.ParamStringRequired(config.Parameters, "schema_class")
+	schemaClass, err := pipeline.ParamString(config.Parameters, "schema_class", "")
 	if err != nil {
 		return nil, fmt.Errorf("lychgate_response: %w", err)
 	}
@@ -154,7 +154,11 @@ func (l *LychgateResponseComponent) produceRequest(data pipeline.Data) pipeline.
 		return data
 	}
 
-	requestPayload := NewRequestPayload(l.systemID, l.entityID, string(requestJson), l.schemaClass)
+	var schemaClassPtr *string
+	if l.schemaClass != "" {
+		schemaClassPtr = &l.schemaClass
+	}
+	requestPayload := NewRequestPayload(l.systemID, l.entityID, string(requestJson), schemaClassPtr)
 	l.sendToLychgate(requestPayload)
 	return data
 }
@@ -370,9 +374,12 @@ func (l *LychgateResponseComponent) publishToMQTT(cfgMap map[string]string, requ
 }
 
 // Execute consumes each incoming Data item via produceRequest and sends it to Lychgate.
-// As a sink component, it does not forward data downstream.
+// As a sink component, it blocks until all input is consumed, then returns nil.
 func (l *LychgateResponseComponent) Execute(ctx context.Context, input <-chan pipeline.Data) (<-chan pipeline.Data, error) {
+	done := make(chan struct{})
+
 	go func() {
+		defer close(done)
 		for {
 			select {
 			case <-ctx.Done():
@@ -386,6 +393,8 @@ func (l *LychgateResponseComponent) Execute(ctx context.Context, input <-chan pi
 		}
 	}()
 
+	// Block until consumption is complete so the executor knows we're still working
+	<-done
 	return nil, nil
 }
 
@@ -396,9 +405,6 @@ func (l *LychgateResponseComponent) Validate() error {
 	}
 	if l.entityID == 0 {
 		return fmt.Errorf("entity_id is required and must be non-zero")
-	}
-	if l.schemaClass == "" {
-		return fmt.Errorf("schema_class is required")
 	}
 	return nil
 }

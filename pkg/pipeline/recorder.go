@@ -107,7 +107,7 @@ func (r *defaultExecutionRecorder) GetExecutionHistory(ctx context.Context, pipe
 	}
 	defer rows.Close()
 
-	var records []ExecutionRecord
+	records := make([]ExecutionRecord, 0)
 	for rows.Next() {
 		var rec ExecutionRecord
 		if err := rows.Scan(&rec.ID, &rec.PipelineID, &rec.Status, &rec.StartedAt, &rec.EndedAt, &rec.ErrorMessage); err != nil {

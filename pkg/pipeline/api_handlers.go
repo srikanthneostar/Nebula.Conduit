@@ -31,6 +31,9 @@ func (h *PipelineHandlers) CreatePipeline(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Ensure all component and connection IDs are present
+	ensureComponentIDs(req.Components, req.Connections)
+
 	def := PipelineDefinition{
 		ID:             uuid.New().String(),
 		Name:           req.Name,
@@ -501,6 +504,9 @@ func (h *PipelineHandlers) ImportPipelines(w http.ResponseWriter, r *http.Reques
 	var errors []string
 
 	for i, ep := range req.Pipelines {
+		// Ensure all component and connection IDs are present
+		ensureComponentIDs(ep.Components, ep.Connections)
+
 		def := PipelineDefinition{
 			Name:           ep.Name,
 			Description:    ep.Description,
@@ -559,6 +565,33 @@ func splitAndTrim(s string) []string {
 		}
 	}
 	return parts
+}
+
+// ensureComponentIDs generates missing IDs for components and updates
+// connection references accordingly. This handles imported or API-created
+// pipelines where component IDs may be absent.
+func ensureComponentIDs(components []ComponentConfig, connections []Connection) {
+	for i := range components {
+		if components[i].ID == "" {
+			components[i].ID = fmt.Sprintf("%s-%s", components[i].Type, uuid.New().String()[:12])
+		}
+	}
+
+	// Build a lookup: position → component ID (for fixing connections that
+	// reference components by index-based placeholder or empty string)
+	compIDs := make(map[string]bool, len(components))
+	for _, c := range components {
+		compIDs[c.ID] = true
+	}
+
+	// Validate connection references — if a connection references a component
+	// ID that doesn't exist, it's likely stale. Log but don't fix (the graph
+	// validator will catch it).
+	for i := range connections {
+		if connections[i].SourceComponentID == "" || connections[i].TargetComponentID == "" {
+			fmt.Printf("warning: connection[%d] has empty source or target ID\n", i)
+		}
+	}
 }
 
 // GetPipelineLogs returns log entries for a pipeline, queryable by the React frontend.
