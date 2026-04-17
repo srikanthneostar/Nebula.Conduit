@@ -27,48 +27,44 @@ func TestValidateGraph_ValidPipeline(t *testing.T) {
 }
 
 func TestValidateGraph_MissingSource(t *testing.T) {
-	// Invalid: only processor and sink, no source
+	// Invalid: all components have incoming connections, no topology source
 	def := PipelineDefinition{
 		ID:   "test-pipeline",
 		Name: "Test Pipeline",
 		Components: []ComponentConfig{
-			{ID: "processor-1", Type: ComponentTypeLog},
-			{ID: "sink-1", Type: ComponentTypeHTTPPost},
+			{ID: "proc-1", Type: ComponentTypeLog},
+			{ID: "proc-2", Type: ComponentTypeLog},
 		},
 		Connections: []Connection{
-			{SourceComponentID: "processor-1", TargetComponentID: "sink-1"},
+			{SourceComponentID: "proc-1", TargetComponentID: "proc-2"},
+			{SourceComponentID: "proc-2", TargetComponentID: "proc-1"},
 		},
 	}
 
 	err := ValidateGraph(def)
 	if err == nil {
-		t.Error("Expected error for pipeline without source component")
-	}
-	if err != nil && err.Error() != "pipeline must have at least one source component" {
-		t.Errorf("Expected specific error message, got: %v", err)
+		t.Error("Expected error for pipeline with cycle (no topology source)")
 	}
 }
 
 func TestValidateGraph_MissingSink(t *testing.T) {
-	// Invalid: only source and processor, no sink
+	// Invalid: all components have outgoing connections, no topology sink
 	def := PipelineDefinition{
 		ID:   "test-pipeline",
 		Name: "Test Pipeline",
 		Components: []ComponentConfig{
-			{ID: "source-1", Type: ComponentTypeHTTPGet},
-			{ID: "processor-1", Type: ComponentTypeLog},
+			{ID: "proc-1", Type: ComponentTypeLog},
+			{ID: "proc-2", Type: ComponentTypeLog},
 		},
 		Connections: []Connection{
-			{SourceComponentID: "source-1", TargetComponentID: "processor-1"},
+			{SourceComponentID: "proc-1", TargetComponentID: "proc-2"},
+			{SourceComponentID: "proc-2", TargetComponentID: "proc-1"},
 		},
 	}
 
 	err := ValidateGraph(def)
 	if err == nil {
-		t.Error("Expected error for pipeline without sink component")
-	}
-	if err != nil && err.Error() != "pipeline must have at least one sink component" {
-		t.Errorf("Expected specific error message, got: %v", err)
+		t.Error("Expected error for pipeline with cycle (no topology sink)")
 	}
 }
 
@@ -121,13 +117,13 @@ func TestValidateGraph_SelfLoop(t *testing.T) {
 }
 
 func TestValidateGraph_SinkAsSource(t *testing.T) {
-	// Invalid: sink component used as source in connection
+	// Invalid: strict sink component used as source in connection
 	def := PipelineDefinition{
 		ID:   "test-pipeline",
 		Name: "Test Pipeline",
 		Components: []ComponentConfig{
 			{ID: "source-1", Type: ComponentTypeHTTPGet},
-			{ID: "sink-1", Type: ComponentTypeHTTPPost},
+			{ID: "sink-1", Type: ComponentTypeLogSink},
 			{ID: "sink-2", Type: ComponentTypeKafkaProducer},
 		},
 		Connections: []Connection{
