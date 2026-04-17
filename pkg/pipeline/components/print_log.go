@@ -93,10 +93,13 @@ func (p *PrintLogComponent) Execute(ctx context.Context, input <-chan pipeline.D
 }
 
 func (p *PrintLogComponent) logToStore(ctx context.Context, data pipeline.Data) {
-	// Resolve message template if present
+	// Resolve message template if present, or use default
 	msg := p.message
 	if msg != "" && data.Metadata != nil {
 		msg = replaceTemplateVars(msg, data.Metadata)
+	}
+	if msg == "" {
+		msg = fmt.Sprintf("Data received by %s", p.config.ID)
 	}
 
 	entry := pipeline.PipelineLogEntry{

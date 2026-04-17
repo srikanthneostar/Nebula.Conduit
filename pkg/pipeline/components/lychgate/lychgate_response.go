@@ -56,8 +56,8 @@ func ParseCommunicationMode(s string) (CommunicationMode, error) {
 	}
 }
 
-// LychgateResponseComponent is a processor component that enriches pipeline data
-// with Lychgate system routing metadata (SystemId, EntityId, SchemaClass, CommunicationMode).
+// LychgateResponseComponent is a sink component that sends pipeline data
+// to Lychgate via RabbitMQ, Kafka, or MQTT, enriched with routing metadata.
 type LychgateResponseComponent struct {
 	config            pipeline.ComponentConfig
 	systemID          int
@@ -65,6 +65,51 @@ type LychgateResponseComponent struct {
 	schemaClass       string
 	communicationMode CommunicationMode
 	db                *sql.DB
+	logStore          pipeline.LogStore
+	pipelineID        string
+	executionID       string
+}
+
+// SetLogStore injects the LogStore dependency.
+func (l *LychgateResponseComponent) SetLogStore(store pipeline.LogStore) {
+	l.logStore = store
+}
+
+// SetPipelineContext injects pipeline and execution IDs.
+func (l *LychgateResponseComponent) SetPipelineContext(pipelineID, executionID string) {
+	l.pipelineID = pipelineID
+	l.executionID = executionID
+}
+
+// log writes a structured log entry to the database and stdout.
+func (l *LychgateResponseComponent) log(level, message string) {
+	fmt.Printf("Lychgate[%s]: %s\n", l.config.ID, message)
+	if l.logStore != nil {
+		entry := pipeline.PipelineLogEntry{
+			PipelineID:  l.pipelineID,
+			ExecutionID: l.executionID,
+			ComponentID: l.config.ID,
+			LogLevel:    level,
+			Message:     message,
+		}
+		_ = l.logStore.InsertLog(context.Background(), entry)
+	}
+}
+
+// logWithPayload writes a log entry that includes payload data.
+func (l *LychgateResponseComponent) logWithPayload(level, message string, payload string) {
+	fmt.Printf("Lychgate[%s]: %s\n", l.config.ID, message)
+	if l.logStore != nil {
+		entry := pipeline.PipelineLogEntry{
+			PipelineID:  l.pipelineID,
+			ExecutionID: l.executionID,
+			ComponentID: l.config.ID,
+			LogLevel:    level,
+			Message:     message,
+			Payload:     payload,
+		}
+		_ = l.logStore.InsertLog(context.Background(), entry)
+	}
 }
 
 // NewLychgateResponseComponent creates a new Lychgate Response component.
@@ -148,11 +193,17 @@ func (l *LychgateResponseComponent) produceRequest(data pipeline.Data) pipeline.
 	data.Metadata["lychgate_entity_id"] = fmt.Sprintf("%d", l.entityID)
 	data.Metadata["lychgate_schema_class"] = l.schemaClass
 	data.Metadata["lychgate_communication_mode"] = l.communicationMode.String()
+
+	l.log("info", fmt.Sprintf("Data received — enriching with routing metadata (system_id=%d, entity_id=%d, mode=%s)",
+		l.systemID, l.entityID, l.communicationMode.String()))
+
 	requestJson, err := json.Marshal(data.Payload)
 	if err != nil {
-		fmt.Printf("Error occurred converting the Payload to json: %v\n", err)
+		l.log("error", fmt.Sprintf("Failed to marshal payload to JSON: %v", err))
 		return data
 	}
+
+	l.log("debug", fmt.Sprintf("Payload serialized (%d bytes)", len(requestJson)))
 
 	var schemaClassPtr *string
 	if l.schemaClass != "" {
@@ -168,17 +219,21 @@ func (l *LychgateResponseComponent) sendToLychgate(requestPayload *RequestPayloa
 	if category == "MQTT" {
 		category = "NEBULASTREAMER"
 	}
+
+	l.log("debug", fmt.Sprintf("Fetching broker config from vault.db (category=%s)", category))
+
 	appConfigs, err := l.GetByCategory(category)
 	if err != nil {
-		fmt.Printf("Error fetching app configs: %v\n", err)
+		l.log("error", fmt.Sprintf("Failed to fetch app configs for category %q: %v", category, err))
 		return
 	}
 
-	// Build a key→value lookup from the app_configs rows
 	cfgMap := make(map[string]string, len(appConfigs))
 	for _, c := range appConfigs {
 		cfgMap[c.Key] = c.Value
 	}
+
+	l.log("debug", fmt.Sprintf("Broker config loaded (%d keys)", len(cfgMap)))
 
 	switch l.communicationMode {
 	case CommunicationModeRabbitMQ:
@@ -200,42 +255,43 @@ func (l *LychgateResponseComponent) publishToRabbitMQ(cfgMap map[string]string, 
 	virtualHost := cfgMap["VirtualHost"]
 
 	if host == "" || port == "" || username == "" || password == "" {
-		fmt.Println("RabbitMQ config incomplete: Host, Port, Username, Password are required")
+		l.log("error", "RabbitMQ config incomplete: Host, Port, Username, Password are required")
 		return
 	}
 
-	// Build AMQP connection URL: amqp://user:pass@host:port/vhost
 	vhost := ""
 	if virtualHost != "" {
 		vhost = "/" + virtualHost
 	}
 	connURL := fmt.Sprintf("amqp://%s:%s@%s:%s%s", username, password, host, port, vhost)
 
+	l.log("debug", fmt.Sprintf("Connecting to RabbitMQ at %s:%s (vhost=%s)", host, port, virtualHost))
+
 	conn, err := amqp.Dial(connURL)
 	if err != nil {
-		fmt.Printf("Failed to connect to RabbitMQ: %v\n", err)
+		l.log("error", fmt.Sprintf("Failed to connect to RabbitMQ: %v", err))
 		return
 	}
 	defer conn.Close()
 
 	ch, err := conn.Channel()
 	if err != nil {
-		fmt.Printf("Failed to open RabbitMQ channel: %v\n", err)
+		l.log("error", fmt.Sprintf("Failed to open RabbitMQ channel: %v", err))
 		return
 	}
 	defer ch.Close()
 
-	// Declare a topic exchange using the schemaClass
 	exchange := "nebula.exchange"
 	if err := ch.ExchangeDeclare(exchange, "topic", true, false, false, false, nil); err != nil {
-		fmt.Printf("Failed to declare exchange %q: %v\n", exchange, err)
+		l.log("error", fmt.Sprintf("Failed to declare exchange %q: %v", exchange, err))
 		return
 	}
 
-	// Serialise the payload
+	l.log("debug", fmt.Sprintf("RabbitMQ connected — exchange=%s, topic=%s", exchange, topic))
+
 	body, err := json.Marshal(requestPayload)
 	if err != nil {
-		fmt.Printf("Failed to marshal RequestPayload: %v\n", err)
+		l.log("error", fmt.Sprintf("Failed to marshal RequestPayload: %v", err))
 		return
 	}
 
@@ -250,12 +306,13 @@ func (l *LychgateResponseComponent) publishToRabbitMQ(cfgMap map[string]string, 
 	}
 
 	if err := ch.PublishWithContext(ctx, exchange, topic, false, false, msg); err != nil {
-		fmt.Printf("Failed to publish message to RabbitMQ: %v\n", err)
+		l.log("error", fmt.Sprintf("Failed to publish to RabbitMQ: %v", err))
 		return
 	}
 
-	fmt.Printf("Published message to RabbitMQ exchange=%s routingKey=%s (%d bytes)\n",
-		exchange, l.schemaClass, len(body))
+	l.logWithPayload("info",
+		fmt.Sprintf("Published to RabbitMQ — exchange=%s, topic=%s (%d bytes)", exchange, topic, len(body)),
+		string(body))
 }
 
 // publishToKafka connects using the app_configs values and writes the serialised
@@ -265,11 +322,10 @@ func (l *LychgateResponseComponent) publishToKafka(cfgMap map[string]string, req
 	servers := cfgMap["SERVERS"]
 
 	if servers == "" {
-		fmt.Println("Kafka config incomplete: SERVERS and TOPICS are required")
+		l.log("error", "Kafka config incomplete: SERVERS is required")
 		return
 	}
 
-	// SERVERS and TOPICS can be comma-separated
 	brokers := strings.Split(servers, ",")
 	for i := range brokers {
 		brokers[i] = strings.TrimSpace(brokers[i])
@@ -280,21 +336,21 @@ func (l *LychgateResponseComponent) publishToKafka(cfgMap map[string]string, req
 		topicList[i] = strings.TrimSpace(topicList[i])
 	}
 
-	// Serialise the payload
 	body, err := json.Marshal(requestPayload)
 	if err != nil {
-		fmt.Printf("Failed to marshal RequestPayload for Kafka: %v\n", err)
+		l.log("error", fmt.Sprintf("Failed to marshal RequestPayload for Kafka: %v", err))
 		return
 	}
+
+	l.log("debug", fmt.Sprintf("Connecting to Kafka brokers=%v, topics=%v", brokers, topicList))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Publish to each configured topic
-	for _, topic := range topicList {
+	for _, t := range topicList {
 		writer := &kafka.Writer{
 			Addr:         kafka.TCP(brokers...),
-			Topic:        topic,
+			Topic:        t,
 			Balancer:     &kafka.LeastBytes{},
 			RequiredAcks: kafka.RequireOne,
 		}
@@ -307,12 +363,13 @@ func (l *LychgateResponseComponent) publishToKafka(cfgMap map[string]string, req
 		writer.Close()
 
 		if err != nil {
-			fmt.Printf("Failed to publish message to Kafka topic=%s: %v\n", topic, err)
+			l.log("error", fmt.Sprintf("Failed to publish to Kafka topic=%s: %v", t, err))
 			continue
 		}
 
-		fmt.Printf("Published message to Kafka topic=%s key=%s (%d bytes)\n",
-			topic, l.schemaClass, len(body))
+		l.logWithPayload("info",
+			fmt.Sprintf("Published to Kafka — topic=%s, key=%s (%d bytes)", t, l.schemaClass, len(body)),
+			string(body))
 	}
 }
 
@@ -325,9 +382,11 @@ func (l *LychgateResponseComponent) publishToMQTT(cfgMap map[string]string, requ
 	password := cfgMap["PASS"]
 
 	if broker == "" {
-		fmt.Println("MQTT config incomplete: HOST_VAL is required")
+		l.log("error", "MQTT config incomplete: HOST_VAL is required")
 		return
 	}
+
+	l.log("debug", fmt.Sprintf("Connecting to MQTT broker=%s", broker))
 
 	opts := mqtt.NewClientOptions().
 		AddBroker(broker).
@@ -344,56 +403,63 @@ func (l *LychgateResponseComponent) publishToMQTT(cfgMap map[string]string, requ
 	client := mqtt.NewClient(opts)
 	token := client.Connect()
 	if !token.WaitTimeout(10 * time.Second) {
-		fmt.Printf("MQTT connection timed out to %s\n", broker)
+		l.log("error", fmt.Sprintf("MQTT connection timed out to %s", broker))
 		return
 	}
 	if token.Error() != nil {
-		fmt.Printf("Failed to connect to MQTT broker %s: %v\n", broker, token.Error())
+		l.log("error", fmt.Sprintf("Failed to connect to MQTT broker %s: %v", broker, token.Error()))
 		return
 	}
 	defer client.Disconnect(250)
 
+	l.log("debug", "MQTT connected successfully")
+
 	body, err := json.Marshal(requestPayload)
 	if err != nil {
-		fmt.Printf("Failed to marshal RequestPayload for MQTT: %v\n", err)
+		l.log("error", fmt.Sprintf("Failed to marshal RequestPayload for MQTT: %v", err))
 		return
 	}
 
 	pubToken := client.Publish(topic, 1, false, body)
 	if !pubToken.WaitTimeout(10 * time.Second) {
-		fmt.Printf("MQTT publish timed out on topic=%s\n", topic)
+		l.log("error", fmt.Sprintf("MQTT publish timed out on topic=%s", topic))
 		return
 	}
 	if pubToken.Error() != nil {
-		fmt.Printf("Failed to publish message to MQTT topic=%s: %v\n", topic, pubToken.Error())
+		l.log("error", fmt.Sprintf("Failed to publish to MQTT topic=%s: %v", topic, pubToken.Error()))
 		return
 	}
 
-	fmt.Printf("Published message to MQTT broker=%s topic=%s (%d bytes)\n",
-		broker, topic, len(body))
+	l.logWithPayload("info",
+		fmt.Sprintf("Published to MQTT — broker=%s, topic=%s (%d bytes)", broker, topic, len(body)),
+		string(body))
 }
 
 // Execute consumes each incoming Data item via produceRequest and sends it to Lychgate.
 // As a sink component, it blocks until all input is consumed, then returns nil.
 func (l *LychgateResponseComponent) Execute(ctx context.Context, input <-chan pipeline.Data) (<-chan pipeline.Data, error) {
 	done := make(chan struct{})
+	itemCount := 0
 
 	go func() {
 		defer close(done)
 		for {
 			select {
 			case <-ctx.Done():
+				l.log("warn", "Context cancelled — stopping consumption")
 				return
 			case data, ok := <-input:
 				if !ok {
+					l.log("info", fmt.Sprintf("Input channel closed — processed %d item(s)", itemCount))
 					return
 				}
+				itemCount++
+				l.log("debug", fmt.Sprintf("Processing item #%d (trace=%s)", itemCount, data.TraceID))
 				l.produceRequest(data)
 			}
 		}
 	}()
 
-	// Block until consumption is complete so the executor knows we're still working
 	<-done
 	return nil, nil
 }
@@ -420,3 +486,6 @@ func (l *LychgateResponseComponent) ID() string {
 func (l *LychgateResponseComponent) Config() pipeline.ComponentConfig {
 	return l.config
 }
+
+var _ pipeline.Component = (*LychgateResponseComponent)(nil)
+var _ pipeline.LogStoreInjectable = (*LychgateResponseComponent)(nil)
