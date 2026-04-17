@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -182,10 +183,53 @@ func NewLychgateResponseComponent(config pipeline.ComponentConfig) (pipeline.Com
 	}, nil
 }
 
-// produceRequest enriches the given Data with Lychgate routing metadata and returns
-// the modified Data ready for downstream consumption. It has full access to the
-// component's configured properties (systemID, entityID, schemaClass, communicationMode).
-func (l *LychgateResponseComponent) produceRequest(data pipeline.Data) pipeline.Data {
+func payloadRecords(payload interface{}) ([]interface{}, string, bool) {
+	if payload == nil {
+		return []interface{}{payload}, "payload", false
+	}
+
+	if items, ok := interfaceSlice(payload); ok {
+		return items, "payload", true
+	}
+
+	if payloadMap, ok := payload.(map[string]interface{}); ok {
+		if nested, exists := payloadMap["data"]; exists {
+			if items, ok := interfaceSlice(nested); ok {
+				return items, "payload.data", true
+			}
+		}
+	}
+
+	return []interface{}{payload}, "payload", false
+}
+
+func interfaceSlice(value interface{}) ([]interface{}, bool) {
+	if value == nil {
+		return nil, false
+	}
+
+	switch v := value.(type) {
+	case []interface{}:
+		return v, true
+	case []byte:
+		return nil, false
+	}
+
+	rv := reflect.ValueOf(value)
+	if rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array {
+		return nil, false
+	}
+
+	items := make([]interface{}, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		items[i] = rv.Index(i).Interface()
+	}
+	return items, true
+}
+
+// produceRequest enriches the given Data with Lychgate routing metadata and sends
+// the resulting payload to Lychgate using the configured transport.
+func (l *LychgateResponseComponent) produceRequest(data pipeline.Data) error {
 	if data.Metadata == nil {
 		data.Metadata = make(map[string]string)
 	}
@@ -196,25 +240,52 @@ func (l *LychgateResponseComponent) produceRequest(data pipeline.Data) pipeline.
 
 	l.log("info", fmt.Sprintf("Data received — enriching with routing metadata (system_id=%d, entity_id=%d, mode=%s)",
 		l.systemID, l.entityID, l.communicationMode.String()))
+	l.log("debug", fmt.Sprintf("Execute payload inspection started (trace=%s, payload_type=%T)", data.TraceID, data.Payload))
 
-	requestJson, err := json.Marshal(data.Payload)
-	if err != nil {
-		l.log("error", fmt.Sprintf("Failed to marshal payload to JSON: %v", err))
-		return data
+	records, source, split := payloadRecords(data.Payload)
+	if split {
+		l.log("info", fmt.Sprintf("Detected %d record(s) in %s — producing one Lychgate message per record", len(records), source))
+	} else {
+		l.log("info", fmt.Sprintf("Detected non-array %s — producing a single Lychgate message", source))
 	}
-
-	l.log("debug", fmt.Sprintf("Payload serialized (%d bytes)", len(requestJson)))
 
 	var schemaClassPtr *string
 	if l.schemaClass != "" {
 		schemaClassPtr = &l.schemaClass
 	}
-	requestPayload := NewRequestPayload(l.systemID, l.entityID, string(requestJson), schemaClassPtr)
-	l.sendToLychgate(requestPayload)
-	return data
+
+	var publishErrs []string
+	for i, record := range records {
+		l.log("debug", fmt.Sprintf("Preparing record %d/%d from %s (record_type=%T)", i+1, len(records), source, record))
+
+		requestJson, err := json.Marshal(record)
+		if err != nil {
+			publishErrs = append(publishErrs, fmt.Sprintf("record %d: marshal failed: %v", i+1, err))
+			l.log("error", fmt.Sprintf("Failed to marshal record %d/%d from %s: %v", i+1, len(records), source, err))
+			continue
+		}
+
+		l.log("debug", fmt.Sprintf("Record %d/%d serialized (%d bytes)", i+1, len(records), len(requestJson)))
+
+		requestPayload := NewRequestPayload(l.systemID, l.entityID, string(requestJson), schemaClassPtr)
+		if err := l.sendToLychgate(requestPayload); err != nil {
+			publishErrs = append(publishErrs, fmt.Sprintf("record %d: %v", i+1, err))
+			l.log("error", fmt.Sprintf("Failed to publish record %d/%d from %s: %v", i+1, len(records), source, err))
+			continue
+		}
+
+		l.log("info", fmt.Sprintf("Record %d/%d from %s published successfully", i+1, len(records), source))
+	}
+
+	if len(publishErrs) > 0 {
+		return fmt.Errorf("failed to publish %d of %d record(s): %s", len(publishErrs), len(records), strings.Join(publishErrs, "; "))
+	}
+
+	l.log("info", fmt.Sprintf("Completed publishing %d record(s) for trace=%s", len(records), data.TraceID))
+	return nil
 }
 
-func (l *LychgateResponseComponent) sendToLychgate(requestPayload *RequestPayload) {
+func (l *LychgateResponseComponent) sendToLychgate(requestPayload *RequestPayload) error {
 	category := strings.ToUpper(l.communicationMode.String())
 	if category == "MQTT" {
 		category = "NEBULASTREAMER"
@@ -224,8 +295,7 @@ func (l *LychgateResponseComponent) sendToLychgate(requestPayload *RequestPayloa
 
 	appConfigs, err := l.GetByCategory(category)
 	if err != nil {
-		l.log("error", fmt.Sprintf("Failed to fetch app configs for category %q: %v", category, err))
-		return
+		return fmt.Errorf("failed to fetch app configs for category %q: %w", category, err)
 	}
 
 	cfgMap := make(map[string]string, len(appConfigs))
@@ -237,17 +307,21 @@ func (l *LychgateResponseComponent) sendToLychgate(requestPayload *RequestPayloa
 
 	switch l.communicationMode {
 	case CommunicationModeRabbitMQ:
-		l.publishToRabbitMQ(cfgMap, requestPayload)
+		return l.publishToRabbitMQ(cfgMap, requestPayload)
 	case CommunicationModeKafka:
-		l.publishToKafka(cfgMap, requestPayload)
+		return l.publishToKafka(cfgMap, requestPayload)
 	case CommunicationModeMQTT:
-		l.publishToMQTT(cfgMap, requestPayload)
+		return l.publishToMQTT(cfgMap, requestPayload)
+	default:
+		return fmt.Errorf("unsupported communication mode: %s", l.communicationMode.String())
 	}
+
+	return nil
 }
 
 // publishToRabbitMQ connects using the app_configs values and publishes the
 // serialised RequestPayload to a topic exchange with schemaClass as the routing key.
-func (l *LychgateResponseComponent) publishToRabbitMQ(cfgMap map[string]string, requestPayload *RequestPayload) {
+func (l *LychgateResponseComponent) publishToRabbitMQ(cfgMap map[string]string, requestPayload *RequestPayload) error {
 	host := cfgMap["Host"]
 	port := cfgMap["Port"]
 	username := cfgMap["Username"]
@@ -255,8 +329,7 @@ func (l *LychgateResponseComponent) publishToRabbitMQ(cfgMap map[string]string, 
 	virtualHost := cfgMap["VirtualHost"]
 
 	if host == "" || port == "" || username == "" || password == "" {
-		l.log("error", "RabbitMQ config incomplete: Host, Port, Username, Password are required")
-		return
+		return fmt.Errorf("rabbitmq config incomplete: Host, Port, Username, Password are required")
 	}
 
 	vhost := ""
@@ -269,30 +342,26 @@ func (l *LychgateResponseComponent) publishToRabbitMQ(cfgMap map[string]string, 
 
 	conn, err := amqp.Dial(connURL)
 	if err != nil {
-		l.log("error", fmt.Sprintf("Failed to connect to RabbitMQ: %v", err))
-		return
+		return fmt.Errorf("failed to connect to RabbitMQ: %w", err)
 	}
 	defer conn.Close()
 
 	ch, err := conn.Channel()
 	if err != nil {
-		l.log("error", fmt.Sprintf("Failed to open RabbitMQ channel: %v", err))
-		return
+		return fmt.Errorf("failed to open RabbitMQ channel: %w", err)
 	}
 	defer ch.Close()
 
 	exchange := "nebula.exchange"
 	if err := ch.ExchangeDeclare(exchange, "topic", true, false, false, false, nil); err != nil {
-		l.log("error", fmt.Sprintf("Failed to declare exchange %q: %v", exchange, err))
-		return
+		return fmt.Errorf("failed to declare exchange %q: %w", exchange, err)
 	}
 
 	l.log("debug", fmt.Sprintf("RabbitMQ connected — exchange=%s, topic=%s", exchange, topic))
 
 	body, err := json.Marshal(requestPayload)
 	if err != nil {
-		l.log("error", fmt.Sprintf("Failed to marshal RequestPayload: %v", err))
-		return
+		return fmt.Errorf("failed to marshal RequestPayload: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -306,24 +375,23 @@ func (l *LychgateResponseComponent) publishToRabbitMQ(cfgMap map[string]string, 
 	}
 
 	if err := ch.PublishWithContext(ctx, exchange, topic, false, false, msg); err != nil {
-		l.log("error", fmt.Sprintf("Failed to publish to RabbitMQ: %v", err))
-		return
+		return fmt.Errorf("failed to publish to RabbitMQ: %w", err)
 	}
 
 	l.logWithPayload("info",
 		fmt.Sprintf("Published to RabbitMQ — exchange=%s, topic=%s (%d bytes)", exchange, topic, len(body)),
 		string(body))
+	return nil
 }
 
 // publishToKafka connects using the app_configs values and writes the serialised
 // RequestPayload to the configured Kafka topic(s).
 // Expected config keys: SERVERS, TOPICS, GROUP (optional), PARTITIONS (optional).
-func (l *LychgateResponseComponent) publishToKafka(cfgMap map[string]string, requestPayload *RequestPayload) {
+func (l *LychgateResponseComponent) publishToKafka(cfgMap map[string]string, requestPayload *RequestPayload) error {
 	servers := cfgMap["SERVERS"]
 
 	if servers == "" {
-		l.log("error", "Kafka config incomplete: SERVERS is required")
-		return
+		return fmt.Errorf("kafka config incomplete: SERVERS is required")
 	}
 
 	brokers := strings.Split(servers, ",")
@@ -338,8 +406,7 @@ func (l *LychgateResponseComponent) publishToKafka(cfgMap map[string]string, req
 
 	body, err := json.Marshal(requestPayload)
 	if err != nil {
-		l.log("error", fmt.Sprintf("Failed to marshal RequestPayload for Kafka: %v", err))
-		return
+		return fmt.Errorf("failed to marshal RequestPayload for Kafka: %w", err)
 	}
 
 	l.log("debug", fmt.Sprintf("Connecting to Kafka brokers=%v, topics=%v", brokers, topicList))
@@ -347,6 +414,7 @@ func (l *LychgateResponseComponent) publishToKafka(cfgMap map[string]string, req
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	var publishErrs []string
 	for _, t := range topicList {
 		writer := &kafka.Writer{
 			Addr:         kafka.TCP(brokers...),
@@ -363,7 +431,7 @@ func (l *LychgateResponseComponent) publishToKafka(cfgMap map[string]string, req
 		writer.Close()
 
 		if err != nil {
-			l.log("error", fmt.Sprintf("Failed to publish to Kafka topic=%s: %v", t, err))
+			publishErrs = append(publishErrs, fmt.Sprintf("topic=%s: %v", t, err))
 			continue
 		}
 
@@ -371,19 +439,24 @@ func (l *LychgateResponseComponent) publishToKafka(cfgMap map[string]string, req
 			fmt.Sprintf("Published to Kafka — topic=%s, key=%s (%d bytes)", t, l.schemaClass, len(body)),
 			string(body))
 	}
+
+	if len(publishErrs) > 0 {
+		return fmt.Errorf("failed to publish to Kafka: %s", strings.Join(publishErrs, "; "))
+	}
+
+	return nil
 }
 
 // publishToMQTT connects using the app_configs values (category NEBULASTREAMER)
 // and publishes the serialised RequestPayload to the schemaClass topic.
 // Expected config keys: HOST_VAL, USER_NAME, PASS.
-func (l *LychgateResponseComponent) publishToMQTT(cfgMap map[string]string, requestPayload *RequestPayload) {
+func (l *LychgateResponseComponent) publishToMQTT(cfgMap map[string]string, requestPayload *RequestPayload) error {
 	broker := cfgMap["HOST_VAL"]
 	username := cfgMap["USER_NAME"]
 	password := cfgMap["PASS"]
 
 	if broker == "" {
-		l.log("error", "MQTT config incomplete: HOST_VAL is required")
-		return
+		return fmt.Errorf("mqtt config incomplete: HOST_VAL is required")
 	}
 
 	l.log("debug", fmt.Sprintf("Connecting to MQTT broker=%s", broker))
@@ -403,12 +476,10 @@ func (l *LychgateResponseComponent) publishToMQTT(cfgMap map[string]string, requ
 	client := mqtt.NewClient(opts)
 	token := client.Connect()
 	if !token.WaitTimeout(10 * time.Second) {
-		l.log("error", fmt.Sprintf("MQTT connection timed out to %s", broker))
-		return
+		return fmt.Errorf("mqtt connection timed out to %s", broker)
 	}
 	if token.Error() != nil {
-		l.log("error", fmt.Sprintf("Failed to connect to MQTT broker %s: %v", broker, token.Error()))
-		return
+		return fmt.Errorf("failed to connect to MQTT broker %s: %w", broker, token.Error())
 	}
 	defer client.Disconnect(250)
 
@@ -416,52 +487,49 @@ func (l *LychgateResponseComponent) publishToMQTT(cfgMap map[string]string, requ
 
 	body, err := json.Marshal(requestPayload)
 	if err != nil {
-		l.log("error", fmt.Sprintf("Failed to marshal RequestPayload for MQTT: %v", err))
-		return
+		return fmt.Errorf("failed to marshal RequestPayload for MQTT: %w", err)
 	}
 
 	pubToken := client.Publish(topic, 1, false, body)
 	if !pubToken.WaitTimeout(10 * time.Second) {
-		l.log("error", fmt.Sprintf("MQTT publish timed out on topic=%s", topic))
-		return
+		return fmt.Errorf("mqtt publish timed out on topic=%s", topic)
 	}
 	if pubToken.Error() != nil {
-		l.log("error", fmt.Sprintf("Failed to publish to MQTT topic=%s: %v", topic, pubToken.Error()))
-		return
+		return fmt.Errorf("failed to publish to MQTT topic=%s: %w", topic, pubToken.Error())
 	}
 
 	l.logWithPayload("info",
 		fmt.Sprintf("Published to MQTT — broker=%s, topic=%s (%d bytes)", broker, topic, len(body)),
 		string(body))
+	return nil
 }
 
 // Execute consumes each incoming Data item via produceRequest and sends it to Lychgate.
 // As a sink component, it blocks until all input is consumed, then returns nil.
 func (l *LychgateResponseComponent) Execute(ctx context.Context, input <-chan pipeline.Data) (<-chan pipeline.Data, error) {
-	done := make(chan struct{})
 	itemCount := 0
+	for {
+		select {
+		case <-ctx.Done():
+			l.log("warn", "Context cancelled — stopping consumption")
+			return nil, ctx.Err()
+		case data, ok := <-input:
+			if !ok {
+				l.log("info", fmt.Sprintf("Input channel closed — processed %d item(s)", itemCount))
+				return nil, nil
+			}
 
-	go func() {
-		defer close(done)
-		for {
-			select {
-			case <-ctx.Done():
-				l.log("warn", "Context cancelled — stopping consumption")
-				return
-			case data, ok := <-input:
-				if !ok {
-					l.log("info", fmt.Sprintf("Input channel closed — processed %d item(s)", itemCount))
-					return
+			itemCount++
+			l.log("debug", fmt.Sprintf("Processing item #%d (trace=%s)", itemCount, data.TraceID))
+
+			if err := l.produceRequest(data); err != nil {
+				l.log("error", fmt.Sprintf("Failed to process item #%d (trace=%s): %v", itemCount, data.TraceID, err))
+				if !l.config.ContinueOnError {
+					return nil, err
 				}
-				itemCount++
-				l.log("debug", fmt.Sprintf("Processing item #%d (trace=%s)", itemCount, data.TraceID))
-				l.produceRequest(data)
 			}
 		}
-	}()
-
-	<-done
-	return nil, nil
+	}
 }
 
 // Validate checks that all required configuration is present and valid.
