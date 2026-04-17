@@ -369,13 +369,10 @@ func (l *LychgateResponseComponent) publishToMQTT(cfgMap map[string]string, requ
 		broker, topic, len(body))
 }
 
-// Execute processes each incoming Data item via produceRequest and forwards it downstream.
+// Execute consumes each incoming Data item via produceRequest and sends it to Lychgate.
+// As a sink component, it does not forward data downstream.
 func (l *LychgateResponseComponent) Execute(ctx context.Context, input <-chan pipeline.Data) (<-chan pipeline.Data, error) {
-	output := make(chan pipeline.Data, 100)
-
 	go func() {
-		defer close(output)
-
 		for {
 			select {
 			case <-ctx.Done():
@@ -384,19 +381,12 @@ func (l *LychgateResponseComponent) Execute(ctx context.Context, input <-chan pi
 				if !ok {
 					return
 				}
-
-				enriched := l.produceRequest(data)
-
-				select {
-				case output <- enriched:
-				case <-ctx.Done():
-					return
-				}
+				l.produceRequest(data)
 			}
 		}
 	}()
 
-	return output, nil
+	return nil, nil
 }
 
 // Validate checks that all required configuration is present and valid.

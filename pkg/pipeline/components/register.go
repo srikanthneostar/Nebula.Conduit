@@ -27,6 +27,7 @@ func RegisterComponents(factory pipeline.ComponentFactory) {
 	factory.Register(pipeline.ComponentTypeLychgateResponse, lychgate.NewLychgateResponseComponent)
 	factory.Register(pipeline.ComponentTypeJSONExtractor, NewJSONExtractorComponent)
 	factory.Register(pipeline.ComponentTypeJSONTransform, NewJSONTransformComponent)
+	factory.Register(pipeline.ComponentTypePrintLog, NewPrintLogComponent)
 
 	// Sink components
 	factory.Register(pipeline.ComponentTypeHTTPPost, NewHTTPPostComponent)

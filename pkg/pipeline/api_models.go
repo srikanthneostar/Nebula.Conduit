@@ -142,3 +142,11 @@ type ImportPipelinesResponse struct {
 	Errors      []string `json:"errors,omitempty"`
 	Message     string   `json:"message"`
 }
+
+// GetPipelineLogsResponse represents the response for fetching pipeline logs
+type GetPipelineLogsResponse struct {
+	Logs     []PipelineLogEntry `json:"logs"`
+	Total    int                `json:"total"`
+	Page     int                `json:"page"`
+	PageSize int                `json:"page_size"`
+}

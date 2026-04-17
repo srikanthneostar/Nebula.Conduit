@@ -27,6 +27,9 @@ func RegisterRoutes(r chi.Router, engine *PipelineEngine) {
 		r.Get("/{id}/executions", handlers.GetExecutionHistory) // Get execution history for pipeline
 		r.Get("/executions/{id}", handlers.GetExecutionDetails) // Get specific execution details
 
+		// Pipeline logs endpoint (for print_log component, visible in React frontend)
+		r.Get("/{id}/logs", handlers.GetPipelineLogs) // Get pipeline log entries
+
 		// Pipeline instance endpoints
 		r.Get("/instances", handlers.ListRunningInstances)            // List all running instances
 		r.Get("/instances/{id}", handlers.GetInstanceStatus)          // Get instance status

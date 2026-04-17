@@ -41,3 +41,9 @@ type SinkComponent interface {
 	// Write consumes data and writes to destination
 	Write(ctx context.Context, input <-chan Data) error
 }
+
+// LogStoreInjectable is implemented by components that need a LogStore
+// (e.g. print_log). The executor injects the store before execution.
+type LogStoreInjectable interface {
+	SetLogStore(store LogStore)
+}

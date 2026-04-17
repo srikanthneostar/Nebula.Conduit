@@ -560,3 +560,60 @@ func splitAndTrim(s string) []string {
 	}
 	return parts
 }
+
+// GetPipelineLogs returns log entries for a pipeline, queryable by the React frontend.
+// Supports query params: page, page_size, execution_id, component_id
+func (h *PipelineHandlers) GetPipelineLogs(w http.ResponseWriter, r *http.Request) {
+	pipelineID := chi.URLParam(r, "id")
+	if pipelineID == "" {
+		respondWithError(w, http.StatusBadRequest, "Pipeline ID is required", "INVALID_REQUEST", nil)
+		return
+	}
+
+	page := 1
+	pageSize := 50
+
+	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+	if pageSizeStr := r.URL.Query().Get("page_size"); pageSizeStr != "" {
+		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 && ps <= 500 {
+			pageSize = ps
+		}
+	}
+
+	offset := (page - 1) * pageSize
+	store := h.engine.GetLogStore()
+	if store == nil {
+		respondWithError(w, http.StatusServiceUnavailable, "Log store not available", "SERVICE_UNAVAILABLE", nil)
+		return
+	}
+
+	// Support filtering by execution_id or component_id
+	var entries []PipelineLogEntry
+	var total int
+	var err error
+
+	if execID := r.URL.Query().Get("execution_id"); execID != "" {
+		entries, total, err = store.GetLogsByExecution(r.Context(), execID, pageSize, offset)
+	} else if compID := r.URL.Query().Get("component_id"); compID != "" {
+		entries, total, err = store.GetLogsByComponent(r.Context(), compID, pageSize, offset)
+	} else {
+		entries, total, err = store.GetLogs(r.Context(), pipelineID, pageSize, offset)
+	}
+
+	if err != nil {
+		log.Error().Err(err).Str("pipeline_id", pipelineID).Msg("Failed to get pipeline logs")
+		respondWithError(w, http.StatusInternalServerError, "Failed to get pipeline logs", "INTERNAL_ERROR", nil)
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, GetPipelineLogsResponse{
+		Logs:     entries,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	})
+}

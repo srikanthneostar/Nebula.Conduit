@@ -26,6 +26,7 @@ type defaultExecutor struct {
 	factory      ComponentFactory
 	recorder     ExecutionRecorder
 	backpressure BackpressureSystem
+	logStore     LogStore
 	instances    map[string]*PipelineInstance
 	mu           sync.RWMutex
 }
@@ -48,6 +49,11 @@ func (e *defaultExecutor) SetRecorder(recorder ExecutionRecorder) {
 // SetBackpressure sets the backpressure system
 func (e *defaultExecutor) SetBackpressure(bp BackpressureSystem) {
 	e.backpressure = bp
+}
+
+// SetLogStore sets the log store for print_log components
+func (e *defaultExecutor) SetLogStore(store LogStore) {
+	e.logStore = store
 }
 
 // Execute runs a pipeline and returns the instance
@@ -141,6 +147,11 @@ func (e *defaultExecutor) Execute(ctx context.Context, pipeline PipelineDefiniti
 		fmt.Printf("  ✓ Component %s validated\n\n", compConfig.ID)
 
 		instance.Components[compConfig.ID] = component
+
+		// Inject LogStore into components that support it (e.g. print_log)
+		if injectable, ok := component.(LogStoreInjectable); ok && e.logStore != nil {
+			injectable.SetLogStore(e.logStore)
+		}
 	}
 	fmt.Printf("✓ All components created and validated\n\n")
 

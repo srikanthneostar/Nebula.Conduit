@@ -18,6 +18,7 @@ type PipelineEngine struct {
 	componentFactory ComponentFactory
 	backpressure     BackpressureSystem
 	recorder         ExecutionRecorder
+	logStore         LogStore
 	logger           *zerolog.Logger
 	metrics          MetricsCollector
 	config           PipelineEngineConfig
@@ -54,11 +55,13 @@ func NewPipelineEngine(
 	config PipelineEngineConfig,
 ) *PipelineEngine {
 	recorder := NewExecutionRecorder(db)
+	logStore := NewLogStore(db)
 	executor := NewExecutor(componentFactory)
 
 	if defaultExec, ok := executor.(*defaultExecutor); ok {
 		defaultExec.SetRecorder(recorder)
 		defaultExec.SetBackpressure(backpressure)
+		defaultExec.SetLogStore(logStore)
 	}
 
 	scheduler := NewScheduler(executor)
@@ -72,6 +75,7 @@ func NewPipelineEngine(
 		componentFactory: componentFactory,
 		backpressure:     backpressure,
 		recorder:         recorder,
+		logStore:         logStore,
 		logger:           logger,
 		metrics:          metrics,
 		config:           config,
@@ -184,4 +188,5 @@ func (e *PipelineEngine) GetExecutor() Executor                 { return e.execu
 func (e *PipelineEngine) GetScheduler() Scheduler               { return e.scheduler }
 func (e *PipelineEngine) GetLifecycleManager() LifecycleManager { return e.lifecycleManager }
 func (e *PipelineEngine) GetRecorder() ExecutionRecorder        { return e.recorder }
+func (e *PipelineEngine) GetLogStore() LogStore                 { return e.logStore }
 func (e *PipelineEngine) GetConfig() PipelineEngineConfig       { return e.config }
