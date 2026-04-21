@@ -131,39 +131,50 @@ func ResolveGraphQLConfig(endpoint, username, password string) GraphQLSyncConfig
 //
 // Flow: login → fetch pipelines → logout
 func SyncPipelinesFromGraphQL(ctx context.Context, cfg GraphQLSyncConfig, repo PipelineRepository, logger *zerolog.Logger) error {
+	fmt.Printf("⚙ [GraphQL Sync] ▶ Starting pipeline sync — endpoint=%s username=%s\n", cfg.Endpoint, cfg.Username)
 	logger.Info().
 		Str("endpoint", cfg.Endpoint).
 		Str("username", cfg.Username).
 		Msg("[GraphQL Sync] ▶ Starting pipeline sync from remote GraphQL endpoint")
 
 	// Step 1 — Login to obtain JWT token
+	fmt.Println("⚙ [GraphQL Sync] Step 1/4 — Sending login mutation...")
 	logger.Info().Str("endpoint", cfg.Endpoint).Msg("[GraphQL Sync] Step 1/4 — Sending login mutation")
 	token, err := graphqlLogin(ctx, cfg, logger)
 	if err != nil {
+		fmt.Printf("⚙ [GraphQL Sync] ✖ Login failed: %v\n", err)
 		logger.Error().Err(err).Msg("[GraphQL Sync] ✖ Login failed — aborting sync")
 		return fmt.Errorf("graphql sync: login failed: %w", err)
 	}
+	fmt.Println("⚙ [GraphQL Sync] ✔ Login successful — JWT token obtained")
 	logger.Info().Msg("[GraphQL Sync] ✔ Login successful — JWT token obtained")
 
 	// Step 2 — Fetch active pipelines using the JWT token
+	fmt.Println("⚙ [GraphQL Sync] Step 2/4 — Fetching active pipelines...")
 	logger.Info().Msg("[GraphQL Sync] Step 2/4 — Fetching active pipelines")
 	pipelines, err := fetchActivePipelines(ctx, cfg.Endpoint, token, logger)
 	if err != nil {
+		fmt.Printf("⚙ [GraphQL Sync] ✖ Failed to fetch pipelines: %v\n", err)
 		logger.Error().Err(err).Msg("[GraphQL Sync] ✖ Failed to fetch pipelines — attempting logout before aborting")
 		_ = graphqlLogout(ctx, cfg.Endpoint, token, cfg.Username, logger)
 		return fmt.Errorf("graphql sync: failed to fetch pipelines: %w", err)
 	}
+	fmt.Printf("⚙ [GraphQL Sync] ✔ Fetched %d pipelines\n", len(pipelines))
 	logger.Info().Int("count", len(pipelines)).Msg("[GraphQL Sync] ✔ Pipelines fetched successfully")
 
 	// Step 3 — Logout immediately
+	fmt.Println("⚙ [GraphQL Sync] Step 3/4 — Sending logout mutation...")
 	logger.Info().Msg("[GraphQL Sync] Step 3/4 — Sending logout mutation")
 	if err := graphqlLogout(ctx, cfg.Endpoint, token, cfg.Username, logger); err != nil {
+		fmt.Printf("⚙ [GraphQL Sync] ⚠ Logout failed: %v\n", err)
 		logger.Warn().Err(err).Msg("[GraphQL Sync] ⚠ Logout failed — session will expire on its own")
 	} else {
+		fmt.Println("⚙ [GraphQL Sync] ✔ Logout successful")
 		logger.Info().Msg("[GraphQL Sync] ✔ Logout successful")
 	}
 
 	// Step 4 — Upsert pipelines into local SQLite
+	fmt.Printf("⚙ [GraphQL Sync] Step 4/4 — Upserting %d pipelines into local SQLite...\n", len(pipelines))
 	logger.Info().Int("count", len(pipelines)).Msg("[GraphQL Sync] Step 4/4 — Upserting pipelines into local SQLite")
 	created, updated, skipped := 0, 0, 0
 	for _, gp := range pipelines {
@@ -210,12 +221,14 @@ func SyncPipelinesFromGraphQL(ctx context.Context, cfg GraphQLSyncConfig, repo P
 		Int("updated", updated).
 		Int("skipped", skipped).
 		Msg("[GraphQL Sync] ■ Pipeline sync completed")
+	fmt.Printf("⚙ [GraphQL Sync] ■ Pipeline sync completed — total=%d created=%d updated=%d skipped=%d\n", len(pipelines), created, updated, skipped)
 	return nil
 }
 
 // graphqlLogin authenticates against the GraphQL endpoint and returns the JWT
 // access token.
 func graphqlLogin(ctx context.Context, cfg GraphQLSyncConfig, logger *zerolog.Logger) (string, error) {
+	fmt.Printf("⚙ [GraphQL Login] Connecting to %s as user '%s'\n", cfg.Endpoint, cfg.Username)
 	query := `mutation UserLogin($username: String!, $password: String!) {
 		userlogin(username: $username, password: $password) {
 			status
@@ -252,11 +265,13 @@ func graphqlLogin(ctx context.Context, cfg GraphQLSyncConfig, logger *zerolog.Lo
 
 	resp, err := graphqlHTTPClient.Do(req)
 	if err != nil {
+		fmt.Printf("⚙ [GraphQL Login] ✖ HTTP request failed: %v\n", err)
 		logger.Error().Err(err).Str("endpoint", cfg.Endpoint).Msg("[GraphQL Login] HTTP request failed")
 		return "", fmt.Errorf("login request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
+	fmt.Printf("⚙ [GraphQL Login] Response status: %d\n", resp.StatusCode)
 	logger.Debug().Int("status_code", resp.StatusCode).Msg("[GraphQL Login] Received response")
 
 	respBody, err := io.ReadAll(resp.Body)

@@ -94,12 +94,17 @@ func (e *PipelineEngine) SetGraphQLConfig(cfg GraphQLSyncConfig) {
 // Initialize initializes the pipeline engine and loads active pipelines
 func (e *PipelineEngine) Initialize(ctx context.Context) error {
 	e.logger.Info().Msg("Initializing pipeline engine")
+	fmt.Println("⚙ [Pipeline Engine] Initializing pipeline engine...")
 
 	// Sync pipelines from remote GraphQL endpoint (runs once at startup)
 	if e.graphqlConfig != nil {
+		fmt.Printf("⚙ [Pipeline Engine] GraphQL sync config found — endpoint=%s username=%s\n", e.graphqlConfig.Endpoint, e.graphqlConfig.Username)
 		if err := SyncPipelinesFromGraphQL(ctx, *e.graphqlConfig, e.repository, e.logger); err != nil {
+			fmt.Printf("⚙ [Pipeline Engine] ✖ GraphQL sync failed: %v\n", err)
 			e.logger.Error().Err(err).Msg("Failed to sync pipelines from GraphQL endpoint — continuing with local pipelines")
 		}
+	} else {
+		fmt.Println("⚙ [Pipeline Engine] No GraphQL sync config set — skipping remote sync")
 	}
 
 	e.scheduler.Start()
