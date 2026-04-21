@@ -497,8 +497,12 @@ func toDefinition(gp graphqlPipeline) (PipelineDefinition, error) {
 		}
 	}
 
-	// Always mark as active — these pipelines came from the active set
-	status := PipelineStatusActive
+	// Normalise status from whatever casing the remote sends
+	status := PipelineStatus(strings.ToLower(strings.TrimSpace(gp.Status)))
+	if status != PipelineStatusActive && status != PipelineStatusInactive {
+		// Unknown status — default to inactive to be safe
+		status = PipelineStatusInactive
+	}
 
 	def := PipelineDefinition{
 		ID:             gp.ID,
