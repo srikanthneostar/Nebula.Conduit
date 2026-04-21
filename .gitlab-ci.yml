@@ -69,6 +69,8 @@ kubernetes-apply:
   script:
     - echo "Applying S3 ConfigMap"
     - kubectl apply -f $CI_PROJECT_DIR/k8s/s3-configmap.yaml --validate=false -n core-insights-nebula
+    - echo "Applying GraphQL ConfigMap"
+    - kubectl apply -f $CI_PROJECT_DIR/k8s/graphql-configmap.yaml --validate=false -n core-insights-nebula
     - echo "Applying Deployment"
     - kubectl apply -f $CI_PROJECT_DIR/k8s/deployment.yaml --validate=false -n core-insights-nebula
     - echo "Applying Service"
