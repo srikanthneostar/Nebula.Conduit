@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -362,6 +363,7 @@ func fetchActivePipelines(ctx context.Context, endpoint, token string, logger *z
 		return nil, fmt.Errorf("failed to read pipeline response: %w", err)
 	}
 
+	fmt.Printf("⚙ [GraphQL Pipelines] Raw response body: %s\n", string(respBody))
 	logger.Debug().Str("response_body", string(respBody)).Msg("[GraphQL Pipelines] Raw response")
 
 	if resp.StatusCode != http.StatusOK {
@@ -444,19 +446,23 @@ func graphqlLogout(ctx context.Context, endpoint, token, username string, logger
 }
 
 // toDefinition converts a graphqlPipeline to a PipelineDefinition.
-// Fields not available in the remote schema (executionMode, cronExpression)
-// are defaulted to sensible values.
+// Pipelines fetched from the remote GraphQL endpoint are treated as active.
+// The execution_mode is normalised to a known value; defaults to "scheduled"
+// when a cron_expression is present, otherwise "continuous".
 func toDefinition(gp graphqlPipeline) (PipelineDefinition, error) {
-	// Default execution mode — if the remote doesn't provide it, assume continuous
-	execMode := ExecutionMode(gp.ExecutionMode)
-	if execMode == "" {
-		execMode = ExecutionModeContinuous
+	// Normalise execution mode from whatever casing the remote sends
+	execMode := ExecutionMode(strings.ToLower(strings.TrimSpace(gp.ExecutionMode)))
+	if execMode != ExecutionModeScheduled && execMode != ExecutionModeContinuous {
+		// Infer from cron expression
+		if strings.TrimSpace(gp.CronExpression) != "" {
+			execMode = ExecutionModeScheduled
+		} else {
+			execMode = ExecutionModeContinuous
+		}
 	}
 
-	status := PipelineStatus(gp.Status)
-	if status == "" {
-		status = PipelineStatusActive
-	}
+	// Always mark as active — these pipelines came from the active set
+	status := PipelineStatusActive
 
 	def := PipelineDefinition{
 		ID:             gp.ID,
