@@ -23,18 +23,53 @@ type GraphQLSyncConfig struct {
 
 // graphqlRequest is the payload sent to the GraphQL endpoint
 type graphqlRequest struct {
-	Query string `json:"query"`
+	Query     string                 `json:"query"`
+	Variables map[string]interface{} `json:"variables,omitempty"`
 }
 
-// graphqlResponse is the top-level response from the GraphQL endpoint
-type graphqlResponse struct {
-	Data   graphqlData    `json:"data"`
+// --- Login response types ---
+
+type loginResponse struct {
+	Data   loginData      `json:"data"`
 	Errors []graphqlError `json:"errors,omitempty"`
 }
 
-type graphqlData struct {
+type loginData struct {
+	UserLogin loginResult `json:"userlogin"`
+}
+
+type loginResult struct {
+	Status         string `json:"status"`
+	MessageType    string `json:"messageType"`
+	Message        string `json:"message"`
+	AccessToken    string `json:"accessToken"`
+	SessionTimeout int    `json:"sessionTimeout"`
+	Data           any    `json:"data"`
+}
+
+// --- Pipeline query response types ---
+
+type pipelineResponse struct {
+	Data   pipelineData   `json:"data"`
+	Errors []graphqlError `json:"errors,omitempty"`
+}
+
+type pipelineData struct {
 	ActivePipelines []graphqlPipeline `json:"activePipelines"`
 }
+
+// --- Logout response types ---
+
+type logoutResponse struct {
+	Data   logoutData     `json:"data"`
+	Errors []graphqlError `json:"errors,omitempty"`
+}
+
+type logoutData struct {
+	Logout json.RawMessage `json:"logout"`
+}
+
+// --- Common types ---
 
 type graphqlError struct {
 	Message string `json:"message"`
@@ -49,6 +84,14 @@ type graphqlPipeline struct {
 	Status         string `json:"status"`
 	CreatedAt      string `json:"createdAt"`
 	UpdatedAt      string `json:"updatedAt"`
+}
+
+// shared HTTP client — skips TLS verification for self-signed certificates
+var graphqlHTTPClient = &http.Client{
+	Timeout: 30 * time.Second,
+	Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	},
 }
 
 // ResolveGraphQLConfig builds the sync config from environment variables with
@@ -85,49 +128,181 @@ func ResolveGraphQLConfig(endpoint, username, password string) GraphQLSyncConfig
 // SyncPipelinesFromGraphQL fetches active pipelines from the remote GraphQL
 // endpoint and upserts them into the local SQLite repository. It is intended
 // to be called once during service startup.
+//
+// Flow: login → fetch pipelines → logout
 func SyncPipelinesFromGraphQL(ctx context.Context, cfg GraphQLSyncConfig, repo PipelineRepository, logger *zerolog.Logger) error {
-	logger.Info().Str("endpoint", cfg.Endpoint).Msg("Starting GraphQL pipeline sync")
+	logger.Info().
+		Str("endpoint", cfg.Endpoint).
+		Str("username", cfg.Username).
+		Msg("[GraphQL Sync] ▶ Starting pipeline sync from remote GraphQL endpoint")
 
-	pipelines, err := fetchActivePipelines(ctx, cfg)
+	// Step 1 — Login to obtain JWT token
+	logger.Info().Str("endpoint", cfg.Endpoint).Msg("[GraphQL Sync] Step 1/4 — Sending login mutation")
+	token, err := graphqlLogin(ctx, cfg, logger)
 	if err != nil {
+		logger.Error().Err(err).Msg("[GraphQL Sync] ✖ Login failed — aborting sync")
+		return fmt.Errorf("graphql sync: login failed: %w", err)
+	}
+	logger.Info().Msg("[GraphQL Sync] ✔ Login successful — JWT token obtained")
+
+	// Step 2 — Fetch active pipelines using the JWT token
+	logger.Info().Msg("[GraphQL Sync] Step 2/4 — Fetching active pipelines")
+	pipelines, err := fetchActivePipelines(ctx, cfg.Endpoint, token, logger)
+	if err != nil {
+		logger.Error().Err(err).Msg("[GraphQL Sync] ✖ Failed to fetch pipelines — attempting logout before aborting")
+		_ = graphqlLogout(ctx, cfg.Endpoint, token, cfg.Username, logger)
 		return fmt.Errorf("graphql sync: failed to fetch pipelines: %w", err)
 	}
+	logger.Info().Int("count", len(pipelines)).Msg("[GraphQL Sync] ✔ Pipelines fetched successfully")
 
-	logger.Info().Int("count", len(pipelines)).Msg("Fetched pipelines from GraphQL endpoint")
+	// Step 3 — Logout immediately
+	logger.Info().Msg("[GraphQL Sync] Step 3/4 — Sending logout mutation")
+	if err := graphqlLogout(ctx, cfg.Endpoint, token, cfg.Username, logger); err != nil {
+		logger.Warn().Err(err).Msg("[GraphQL Sync] ⚠ Logout failed — session will expire on its own")
+	} else {
+		logger.Info().Msg("[GraphQL Sync] ✔ Logout successful")
+	}
 
+	// Step 4 — Upsert pipelines into local SQLite
+	logger.Info().Int("count", len(pipelines)).Msg("[GraphQL Sync] Step 4/4 — Upserting pipelines into local SQLite")
+	created, updated, skipped := 0, 0, 0
 	for _, gp := range pipelines {
+		logger.Debug().
+			Str("pipeline_id", gp.ID).
+			Str("name", gp.Name).
+			Str("status", gp.Status).
+			Str("execution_mode", gp.ExecutionMode).
+			Msg("[GraphQL Sync] Processing pipeline")
+
 		def, err := toDefinition(gp)
 		if err != nil {
-			logger.Warn().Err(err).Str("pipeline", gp.Name).Msg("Skipping pipeline due to conversion error")
+			skipped++
+			logger.Warn().Err(err).Str("pipeline", gp.Name).Msg("[GraphQL Sync] ⚠ Skipping pipeline — conversion error")
 			continue
 		}
 
-		// Try to read existing pipeline — update if found, create otherwise
 		existing, readErr := repo.Read(def.ID)
 		if readErr == nil {
 			def.Components = existing.Components
 			def.Connections = existing.Connections
 			if updateErr := repo.Update(def); updateErr != nil {
-				logger.Error().Err(updateErr).Str("pipeline_id", def.ID).Msg("Failed to update pipeline")
+				skipped++
+				logger.Error().Err(updateErr).Str("pipeline_id", def.ID).Str("name", def.Name).Msg("[GraphQL Sync] ✖ Failed to update pipeline in SQLite")
 			} else {
-				logger.Info().Str("pipeline_id", def.ID).Str("name", def.Name).Msg("Updated pipeline from GraphQL")
+				updated++
+				logger.Info().Str("pipeline_id", def.ID).Str("name", def.Name).Msg("[GraphQL Sync] ✔ Updated existing pipeline")
 			}
 		} else {
+			logger.Debug().Err(readErr).Str("pipeline_id", def.ID).Msg("[GraphQL Sync] Pipeline not found locally — creating new entry")
 			if createErr := repo.Create(def); createErr != nil {
-				logger.Error().Err(createErr).Str("pipeline_id", def.ID).Msg("Failed to create pipeline")
+				skipped++
+				logger.Error().Err(createErr).Str("pipeline_id", def.ID).Str("name", def.Name).Msg("[GraphQL Sync] ✖ Failed to create pipeline in SQLite")
 			} else {
-				logger.Info().Str("pipeline_id", def.ID).Str("name", def.Name).Msg("Created pipeline from GraphQL")
+				created++
+				logger.Info().Str("pipeline_id", def.ID).Str("name", def.Name).Msg("[GraphQL Sync] ✔ Created new pipeline")
 			}
 		}
 	}
 
-	logger.Info().Msg("GraphQL pipeline sync completed")
+	logger.Info().
+		Int("total", len(pipelines)).
+		Int("created", created).
+		Int("updated", updated).
+		Int("skipped", skipped).
+		Msg("[GraphQL Sync] ■ Pipeline sync completed")
 	return nil
 }
 
-// fetchActivePipelines calls the GraphQL endpoint and returns the list of
-// active pipelines.
-func fetchActivePipelines(ctx context.Context, cfg GraphQLSyncConfig) ([]graphqlPipeline, error) {
+// graphqlLogin authenticates against the GraphQL endpoint and returns the JWT
+// access token.
+func graphqlLogin(ctx context.Context, cfg GraphQLSyncConfig, logger *zerolog.Logger) (string, error) {
+	query := `mutation UserLogin($username: String!, $password: String!) {
+		userlogin(username: $username, password: $password) {
+			status
+			messageType
+			message
+			accessToken
+			sessionTimeout
+			data
+		}
+	}`
+
+	payload := graphqlRequest{
+		Query: query,
+		Variables: map[string]interface{}{
+			"username": cfg.Username,
+			"password": cfg.Password,
+		},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		logger.Error().Err(err).Msg("[GraphQL Login] Failed to marshal login request body")
+		return "", fmt.Errorf("failed to marshal login request: %w", err)
+	}
+
+	logger.Debug().Str("endpoint", cfg.Endpoint).Str("username", cfg.Username).Msg("[GraphQL Login] Sending POST request")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.Endpoint, bytes.NewReader(body))
+	if err != nil {
+		logger.Error().Err(err).Msg("[GraphQL Login] Failed to create HTTP request")
+		return "", fmt.Errorf("failed to create login request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := graphqlHTTPClient.Do(req)
+	if err != nil {
+		logger.Error().Err(err).Str("endpoint", cfg.Endpoint).Msg("[GraphQL Login] HTTP request failed")
+		return "", fmt.Errorf("login request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	logger.Debug().Int("status_code", resp.StatusCode).Msg("[GraphQL Login] Received response")
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		logger.Error().Err(err).Msg("[GraphQL Login] Failed to read response body")
+		return "", fmt.Errorf("failed to read login response: %w", err)
+	}
+
+	logger.Debug().Str("response_body", string(respBody)).Msg("[GraphQL Login] Raw response")
+
+	if resp.StatusCode != http.StatusOK {
+		logger.Error().Int("status_code", resp.StatusCode).Str("body", string(respBody)).Msg("[GraphQL Login] Non-200 status code")
+		return "", fmt.Errorf("login endpoint returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var loginResp loginResponse
+	if err := json.Unmarshal(respBody, &loginResp); err != nil {
+		logger.Error().Err(err).Str("body", string(respBody)).Msg("[GraphQL Login] Failed to decode JSON response")
+		return "", fmt.Errorf("failed to decode login response: %w", err)
+	}
+
+	if len(loginResp.Errors) > 0 {
+		logger.Error().Str("graphql_error", loginResp.Errors[0].Message).Msg("[GraphQL Login] GraphQL returned errors")
+		return "", fmt.Errorf("login graphql errors: %s", loginResp.Errors[0].Message)
+	}
+
+	if loginResp.Data.UserLogin.AccessToken == "" {
+		logger.Error().
+			Str("status", loginResp.Data.UserLogin.Status).
+			Str("message", loginResp.Data.UserLogin.Message).
+			Msg("[GraphQL Login] No access token in response")
+		return "", fmt.Errorf("login succeeded but no access token returned (status: %s, message: %s)",
+			loginResp.Data.UserLogin.Status, loginResp.Data.UserLogin.Message)
+	}
+
+	logger.Debug().
+		Str("status", loginResp.Data.UserLogin.Status).
+		Int("session_timeout", loginResp.Data.UserLogin.SessionTimeout).
+		Msg("[GraphQL Login] Token received")
+
+	return loginResp.Data.UserLogin.AccessToken, nil
+}
+
+// fetchActivePipelines calls the GetActivePipelines query using the provided
+// JWT bearer token.
+func fetchActivePipelines(ctx context.Context, endpoint, token string, logger *zerolog.Logger) ([]graphqlPipeline, error) {
 	query := `query GetActivePipelines {
 		activePipelines {
 			id
@@ -143,49 +318,114 @@ func fetchActivePipelines(ctx context.Context, cfg GraphQLSyncConfig) ([]graphql
 
 	body, err := json.Marshal(graphqlRequest{Query: query})
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal graphql request: %w", err)
+		logger.Error().Err(err).Msg("[GraphQL Pipelines] Failed to marshal pipeline query request")
+		return nil, fmt.Errorf("failed to marshal pipeline request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.Endpoint, bytes.NewReader(body))
+	logger.Debug().Str("endpoint", endpoint).Msg("[GraphQL Pipelines] Sending POST request with Bearer token")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		logger.Error().Err(err).Msg("[GraphQL Pipelines] Failed to create HTTP request")
+		return nil, fmt.Errorf("failed to create pipeline request: %w", err)
 	}
-
 	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(cfg.Username, cfg.Password)
+	req.Header.Set("Authorization", "Bearer "+token)
 
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-
-	resp, err := client.Do(req)
+	resp, err := graphqlHTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("graphql request failed: %w", err)
+		logger.Error().Err(err).Str("endpoint", endpoint).Msg("[GraphQL Pipelines] HTTP request failed")
+		return nil, fmt.Errorf("pipeline request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
+	logger.Debug().Int("status_code", resp.StatusCode).Msg("[GraphQL Pipelines] Received response")
+
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		logger.Error().Err(err).Msg("[GraphQL Pipelines] Failed to read response body")
+		return nil, fmt.Errorf("failed to read pipeline response: %w", err)
 	}
+
+	logger.Debug().Str("response_body", string(respBody)).Msg("[GraphQL Pipelines] Raw response")
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("graphql endpoint returned status %d: %s", resp.StatusCode, string(respBody))
+		logger.Error().Int("status_code", resp.StatusCode).Str("body", string(respBody)).Msg("[GraphQL Pipelines] Non-200 status code")
+		return nil, fmt.Errorf("pipeline endpoint returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	var gqlResp graphqlResponse
+	var gqlResp pipelineResponse
 	if err := json.Unmarshal(respBody, &gqlResp); err != nil {
-		return nil, fmt.Errorf("failed to decode graphql response: %w", err)
+		logger.Error().Err(err).Str("body", string(respBody)).Msg("[GraphQL Pipelines] Failed to decode JSON response")
+		return nil, fmt.Errorf("failed to decode pipeline response: %w", err)
 	}
 
 	if len(gqlResp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql errors: %s", gqlResp.Errors[0].Message)
+		logger.Error().Str("graphql_error", gqlResp.Errors[0].Message).Msg("[GraphQL Pipelines] GraphQL returned errors")
+		return nil, fmt.Errorf("pipeline graphql errors: %s", gqlResp.Errors[0].Message)
+	}
+
+	for i, p := range gqlResp.Data.ActivePipelines {
+		logger.Debug().
+			Int("index", i).
+			Str("id", p.ID).
+			Str("name", p.Name).
+			Str("status", p.Status).
+			Str("execution_mode", p.ExecutionMode).
+			Str("cron", p.CronExpression).
+			Msg("[GraphQL Pipelines] Pipeline received")
 	}
 
 	return gqlResp.Data.ActivePipelines, nil
+}
+
+// graphqlLogout calls the Logout mutation to invalidate the session.
+func graphqlLogout(ctx context.Context, endpoint, token, username string, logger *zerolog.Logger) error {
+	query := `mutation Logout($username: String!) {
+		logout(username: $username)
+	}`
+
+	payload := graphqlRequest{
+		Query: query,
+		Variables: map[string]interface{}{
+			"username": username,
+		},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		logger.Error().Err(err).Msg("[GraphQL Logout] Failed to marshal logout request body")
+		return fmt.Errorf("failed to marshal logout request: %w", err)
+	}
+
+	logger.Debug().Str("endpoint", endpoint).Str("username", username).Msg("[GraphQL Logout] Sending POST request")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		logger.Error().Err(err).Msg("[GraphQL Logout] Failed to create HTTP request")
+		return fmt.Errorf("failed to create logout request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := graphqlHTTPClient.Do(req)
+	if err != nil {
+		logger.Error().Err(err).Str("endpoint", endpoint).Msg("[GraphQL Logout] HTTP request failed")
+		return fmt.Errorf("logout request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	logger.Debug().Int("status_code", resp.StatusCode).Msg("[GraphQL Logout] Received response")
+
+	respBody, _ := io.ReadAll(resp.Body)
+	logger.Debug().Str("response_body", string(respBody)).Msg("[GraphQL Logout] Raw response")
+
+	if resp.StatusCode != http.StatusOK {
+		logger.Error().Int("status_code", resp.StatusCode).Str("body", string(respBody)).Msg("[GraphQL Logout] Non-200 status code")
+		return fmt.Errorf("logout endpoint returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
 }
 
 // toDefinition converts a graphqlPipeline to a PipelineDefinition.
