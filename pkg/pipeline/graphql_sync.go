@@ -77,14 +77,32 @@ type graphqlError struct {
 }
 
 type graphqlPipeline struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	Description    string `json:"description"`
-	ExecutionMode  string `json:"execution_mode"`
-	CronExpression string `json:"cron_expression"`
-	Status         string `json:"status"`
-	CreatedAt      string `json:"created_at"`
-	UpdatedAt      string `json:"updated_at"`
+	ID             string              `json:"id"`
+	Name           string              `json:"name"`
+	Description    string              `json:"description"`
+	ExecutionMode  string              `json:"execution_mode"`
+	CronExpression string              `json:"cron_expression"`
+	Status         string              `json:"status"`
+	CreatedAt      string              `json:"created_at"`
+	UpdatedAt      string              `json:"updated_at"`
+	Components     []graphqlComponent  `json:"components"`
+	Connections    []graphqlConnection `json:"connections"`
+}
+
+type graphqlComponent struct {
+	ID              string          `json:"id"`
+	Type            string          `json:"type"`
+	Parameters      json.RawMessage `json:"parameters"`
+	RetryCount      int             `json:"retry_count"`
+	RetryDelay      int             `json:"retry_delay"`
+	ContinueOnError bool            `json:"continue_on_error"`
+	Timeout         int             `json:"timeout"`
+}
+
+type graphqlConnection struct {
+	ID                string `json:"id"`
+	SourceComponentID string `json:"source_component_id"`
+	TargetComponentID string `json:"target_component_id"`
 }
 
 // shared HTTP client — skips TLS verification for self-signed certificates
@@ -195,15 +213,17 @@ func SyncPipelinesFromGraphQL(ctx context.Context, cfg GraphQLSyncConfig, repo P
 
 		existing, readErr := repo.Read(def.ID)
 		if readErr == nil {
-			def.Components = existing.Components
-			def.Connections = existing.Connections
+			// Pipeline exists locally — update it with the remote data
 			if updateErr := repo.Update(def); updateErr != nil {
 				skipped++
 				logger.Error().Err(updateErr).Str("pipeline_id", def.ID).Str("name", def.Name).Msg("[GraphQL Sync] ✖ Failed to update pipeline in SQLite")
 			} else {
 				updated++
-				logger.Info().Str("pipeline_id", def.ID).Str("name", def.Name).Msg("[GraphQL Sync] ✔ Updated existing pipeline")
+				logger.Info().Str("pipeline_id", def.ID).Str("name", def.Name).
+					Int("components", len(def.Components)).Int("connections", len(def.Connections)).
+					Msg("[GraphQL Sync] ✔ Updated existing pipeline")
 			}
+			_ = existing // read was only to check existence
 		} else {
 			logger.Debug().Err(readErr).Str("pipeline_id", def.ID).Msg("[GraphQL Sync] Pipeline not found locally — creating new entry")
 			if createErr := repo.Create(def); createErr != nil {
@@ -211,7 +231,9 @@ func SyncPipelinesFromGraphQL(ctx context.Context, cfg GraphQLSyncConfig, repo P
 				logger.Error().Err(createErr).Str("pipeline_id", def.ID).Str("name", def.Name).Msg("[GraphQL Sync] ✖ Failed to create pipeline in SQLite")
 			} else {
 				created++
-				logger.Info().Str("pipeline_id", def.ID).Str("name", def.Name).Msg("[GraphQL Sync] ✔ Created new pipeline")
+				logger.Info().Str("pipeline_id", def.ID).Str("name", def.Name).
+					Int("components", len(def.Components)).Int("connections", len(def.Connections)).
+					Msg("[GraphQL Sync] ✔ Created new pipeline")
 			}
 		}
 	}
@@ -329,6 +351,20 @@ func fetchActivePipelines(ctx context.Context, endpoint, token string, logger *z
 			status
 			created_at
 			updated_at
+			components {
+				id
+				type
+				parameters
+				retry_count
+				retry_delay
+				continue_on_error
+				timeout
+			}
+			connections {
+				id
+				source_component_id
+				target_component_id
+			}
 		}
 	}`
 
@@ -471,8 +507,8 @@ func toDefinition(gp graphqlPipeline) (PipelineDefinition, error) {
 		ExecutionMode:  execMode,
 		CronExpression: gp.CronExpression,
 		Status:         status,
-		Components:     []ComponentConfig{},
-		Connections:    []Connection{},
+		Components:     toComponentConfigs(gp.Components),
+		Connections:    toConnections(gp.Connections),
 	}
 
 	if t, err := time.Parse(time.RFC3339, gp.CreatedAt); err == nil {
@@ -488,4 +524,47 @@ func toDefinition(gp graphqlPipeline) (PipelineDefinition, error) {
 	}
 
 	return def, nil
+}
+
+// toComponentConfigs converts GraphQL components to the local ComponentConfig slice.
+func toComponentConfigs(gcs []graphqlComponent) []ComponentConfig {
+	configs := make([]ComponentConfig, 0, len(gcs))
+	for _, gc := range gcs {
+		var params map[string]interface{}
+		if len(gc.Parameters) > 0 {
+			if err := json.Unmarshal(gc.Parameters, &params); err != nil {
+				// If parameters is a string (double-encoded JSON), try unwrapping
+				var raw string
+				if json.Unmarshal(gc.Parameters, &raw) == nil {
+					_ = json.Unmarshal([]byte(raw), &params)
+				}
+			}
+		}
+		if params == nil {
+			params = make(map[string]interface{})
+		}
+
+		configs = append(configs, ComponentConfig{
+			ID:              gc.ID,
+			Type:            ComponentType(gc.Type),
+			Parameters:      params,
+			RetryCount:      gc.RetryCount,
+			RetryDelay:      time.Duration(gc.RetryDelay) * time.Millisecond,
+			ContinueOnError: gc.ContinueOnError,
+			Timeout:         time.Duration(gc.Timeout) * time.Millisecond,
+		})
+	}
+	return configs
+}
+
+// toConnections converts GraphQL connections to the local Connection slice.
+func toConnections(gcs []graphqlConnection) []Connection {
+	conns := make([]Connection, 0, len(gcs))
+	for _, gc := range gcs {
+		conns = append(conns, Connection{
+			SourceComponentID: gc.SourceComponentID,
+			TargetComponentID: gc.TargetComponentID,
+		})
+	}
+	return conns
 }
