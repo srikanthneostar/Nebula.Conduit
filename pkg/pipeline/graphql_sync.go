@@ -100,9 +100,9 @@ type graphqlComponent struct {
 }
 
 type graphqlConnection struct {
-	ID                string `json:"id"`
-	SourceComponentID string `json:"source_component_id"`
-	TargetComponentID string `json:"target_component_id"`
+	ID                json.RawMessage `json:"id"`
+	SourceComponentID string          `json:"source_component_id"`
+	TargetComponentID string          `json:"target_component_id"`
 }
 
 // shared HTTP client — skips TLS verification for self-signed certificates
