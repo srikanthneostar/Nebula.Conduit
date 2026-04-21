@@ -79,11 +79,11 @@ type graphqlPipeline struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`
 	Description    string `json:"description"`
-	ExecutionMode  string `json:"executionMode"`
-	CronExpression string `json:"cronExpression"`
+	ExecutionMode  string `json:"execution_mode"`
+	CronExpression string `json:"cron_expression"`
 	Status         string `json:"status"`
-	CreatedAt      string `json:"createdAt"`
-	UpdatedAt      string `json:"updatedAt"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
 }
 
 // shared HTTP client — skips TLS verification for self-signed certificates
@@ -323,11 +323,11 @@ func fetchActivePipelines(ctx context.Context, endpoint, token string, logger *z
 			id
 			name
 			description
-			executionMode
-			cronExpression
+			execution_mode
+			cron_expression
 			status
-			createdAt
-			updatedAt
+			created_at
+			updated_at
 		}
 	}`
 
@@ -444,14 +444,27 @@ func graphqlLogout(ctx context.Context, endpoint, token, username string, logger
 }
 
 // toDefinition converts a graphqlPipeline to a PipelineDefinition.
+// Fields not available in the remote schema (executionMode, cronExpression)
+// are defaulted to sensible values.
 func toDefinition(gp graphqlPipeline) (PipelineDefinition, error) {
+	// Default execution mode — if the remote doesn't provide it, assume continuous
+	execMode := ExecutionMode(gp.ExecutionMode)
+	if execMode == "" {
+		execMode = ExecutionModeContinuous
+	}
+
+	status := PipelineStatus(gp.Status)
+	if status == "" {
+		status = PipelineStatusActive
+	}
+
 	def := PipelineDefinition{
 		ID:             gp.ID,
 		Name:           gp.Name,
 		Description:    gp.Description,
-		ExecutionMode:  ExecutionMode(gp.ExecutionMode),
+		ExecutionMode:  execMode,
 		CronExpression: gp.CronExpression,
-		Status:         PipelineStatus(gp.Status),
+		Status:         status,
 		Components:     []ComponentConfig{},
 		Connections:    []Connection{},
 	}
