@@ -38,3 +38,8 @@ s3:
   S3_REGION: "us-east-1"
   S3_ACCESS_KEY: "minioadmin"
   S3_SECRET_KEY: "minioadmin123"
+
+graphql:
+  GRAPHQL_ENDPOINT: "https://192.168.1.230/api"
+  GRAPHQL_USERNAME: "integration"
+  GRAPHQL_PASSWORD: "Nebula=2020"

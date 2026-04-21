@@ -229,6 +229,10 @@ func NewServer(db *sql.DB, cfg *config.Config) *Server {
 
 	s.pipelineEngine = pipeline.NewPipelineEngine(db, pipelineRepo, pipelineFactory, backpressure, &log.Logger, pipelineMetrics, pipelineConfig)
 
+	// Configure GraphQL sync for remote pipeline loading at startup
+	gqlCfg := pipeline.ResolveGraphQLConfig(cfg.GraphQL.Endpoint, cfg.GraphQL.Username, cfg.GraphQL.Password)
+	s.pipelineEngine.SetGraphQLConfig(gqlCfg)
+
 	// Initialize the pipeline engine to start scheduler and load active pipelines
 	if err := s.pipelineEngine.Initialize(context.Background()); err != nil {
 		log.Error().Err(err).Msg("Failed to initialize pipeline engine")

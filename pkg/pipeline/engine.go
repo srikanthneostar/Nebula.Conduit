@@ -24,6 +24,7 @@ type PipelineEngine struct {
 	config           PipelineEngineConfig
 	db               *sql.DB
 	cleanupCancel    context.CancelFunc
+	graphqlConfig    *GraphQLSyncConfig
 }
 
 // MetricsCollector collects and exposes pipeline metrics
@@ -83,9 +84,23 @@ func NewPipelineEngine(
 	}
 }
 
+// SetGraphQLConfig sets the GraphQL sync configuration on the engine.
+// When set, Initialize will sync pipelines from the remote endpoint before
+// loading active pipelines.
+func (e *PipelineEngine) SetGraphQLConfig(cfg GraphQLSyncConfig) {
+	e.graphqlConfig = &cfg
+}
+
 // Initialize initializes the pipeline engine and loads active pipelines
 func (e *PipelineEngine) Initialize(ctx context.Context) error {
 	e.logger.Info().Msg("Initializing pipeline engine")
+
+	// Sync pipelines from remote GraphQL endpoint (runs once at startup)
+	if e.graphqlConfig != nil {
+		if err := SyncPipelinesFromGraphQL(ctx, *e.graphqlConfig, e.repository, e.logger); err != nil {
+			e.logger.Error().Err(err).Msg("Failed to sync pipelines from GraphQL endpoint — continuing with local pipelines")
+		}
+	}
 
 	e.scheduler.Start()
 

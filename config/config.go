@@ -52,6 +52,12 @@ type Config struct {
 		AccessKey string `mapstructure:"S3_ACCESS_KEY"`
 		SecretKey string `mapstructure:"S3_SECRET_KEY"`
 	} `mapstructure:"s3"`
+
+	GraphQL struct {
+		Endpoint string `mapstructure:"GRAPHQL_ENDPOINT"`
+		Username string `mapstructure:"GRAPHQL_USERNAME"`
+		Password string `mapstructure:"GRAPHQL_PASSWORD"`
+	} `mapstructure:"graphql"`
 }
 
 func LoadConfig(path string) (*Config, error) {

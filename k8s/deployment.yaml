@@ -40,6 +40,8 @@ spec:
         envFrom:
         - configMapRef:
             name: nebula-conduit-s3-config
+        - configMapRef:
+            name: nebula-conduit-graphql-config
         env:
         - name: TZ
           value: Asia/Kolkata
