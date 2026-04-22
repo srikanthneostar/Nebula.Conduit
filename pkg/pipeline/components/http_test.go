@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -298,6 +299,83 @@ func TestHTTPGetComponent_ExecuteWithError(t *testing.T) {
 	}
 }
 
+func TestHTTPGetComponent_ExecuteAsProcessorWaitsForDelayedInput(t *testing.T) {
+	requests := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- r.URL.String()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"message": "templated"}`))
+	}))
+	defer server.Close()
+
+	config := pipeline.ComponentConfig{
+		ID:   "test-http-processor",
+		Type: pipeline.ComponentTypeHTTPGet,
+		Parameters: map[string]interface{}{
+			"url": server.URL + "/customers/{{customer_id}}",
+			"headers": map[string]interface{}{
+				"X-Customer": "{{customer_id}}",
+			},
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	component, err := NewHTTPGetComponent(config)
+	if err != nil {
+		t.Fatalf("failed to create component: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	input := make(chan pipeline.Data, 1)
+	output, err := component.Execute(ctx, input)
+	if err != nil {
+		t.Fatalf("failed to execute component: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	select {
+	case reqPath := <-requests:
+		t.Fatalf("expected HTTP GET to wait for input before sending request, got early request to %s", reqPath)
+	default:
+	}
+
+	input <- pipeline.Data{
+		Metadata: map[string]string{
+			"customer_id": "cust-123",
+		},
+		TraceID: "trace-123",
+	}
+	close(input)
+
+	select {
+	case reqPath := <-requests:
+		if !strings.HasSuffix(reqPath, "/customers/cust-123") {
+			t.Fatalf("expected templated request path to end with /customers/cust-123, got %s", reqPath)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for templated processor request")
+	}
+
+	select {
+	case data, ok := <-output:
+		if !ok {
+			t.Fatal("expected output data but channel was closed")
+		}
+		if data.TraceID != "trace-123" {
+			t.Fatalf("expected trace id trace-123, got %s", data.TraceID)
+		}
+		if data.Metadata["status_code"] != "200" {
+			t.Fatalf("expected status_code 200, got %s", data.Metadata["status_code"])
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for processor output")
+	}
+}
+
 func TestHTTPGetComponent_Type(t *testing.T) {
 	component := &HTTPGetComponent{
 		config: pipeline.ComponentConfig{
@@ -380,7 +458,7 @@ func TestNewHTTPPostComponent(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name: "missing content_type",
+			name: "missing content_type uses default",
 			config: pipeline.ComponentConfig{
 				ID:   "test-http-post-3",
 				Type: pipeline.ComponentTypeHTTPPost,
@@ -388,7 +466,7 @@ func TestNewHTTPPostComponent(t *testing.T) {
 					"url": "https://api.example.com/data",
 				},
 			},
-			expectError: true,
+			expectError: false,
 		},
 		{
 			name: "valid configuration without headers",
@@ -418,6 +496,13 @@ func TestNewHTTPPostComponent(t *testing.T) {
 				if component == nil {
 					t.Errorf("expected component but got nil")
 				}
+				httpPost, ok := component.(*HTTPPostComponent)
+				if !ok {
+					t.Fatalf("expected *HTTPPostComponent, got %T", component)
+				}
+				if tt.name == "missing content_type uses default" && httpPost.contentType != "application/json" {
+					t.Errorf("expected default content type application/json, got %q", httpPost.contentType)
+				}
 			}
 		})
 	}
@@ -443,10 +528,10 @@ func TestHTTPPostComponent_Validate(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name:        "empty content type",
+			name:        "empty content type uses default",
 			url:         "https://api.example.com/data",
 			contentType: "",
-			expectError: true,
+			expectError: false,
 		},
 		{
 			name:        "invalid URL",
@@ -559,11 +644,36 @@ func TestHTTPPostComponent_Execute(t *testing.T) {
 		t.Errorf("expected body '%s', got '%s'", string(testPayload), receivedBody)
 	}
 
-	// Verify output channel is closed
+	// Verify the response is emitted downstream
+	select {
+	case data, ok := <-output:
+		if !ok {
+			t.Fatalf("expected response output but channel was closed")
+		}
+		responsePayload, ok := data.Payload.([]byte)
+		if !ok {
+			t.Fatalf("expected []byte response payload, got %T", data.Payload)
+		}
+		if string(responsePayload) != `{"status": "received"}` {
+			t.Errorf("expected response payload %q, got %q", `{"status": "received"}`, string(responsePayload))
+		}
+		if data.TraceID != "test-trace" {
+			t.Errorf("expected trace id %q, got %q", "test-trace", data.TraceID)
+		}
+		if data.Metadata["status_code"] != "200" {
+			t.Errorf("expected status_code 200, got %s", data.Metadata["status_code"])
+		}
+		if data.Metadata["content_type"] == "" {
+			t.Errorf("expected response content_type metadata to be populated")
+		}
+	case <-time.After(1 * time.Second):
+		t.Errorf("timeout waiting for HTTP POST response output")
+	}
+
 	select {
 	case _, ok := <-output:
 		if ok {
-			t.Errorf("expected output channel to be closed")
+			t.Errorf("expected output channel to be closed after single response")
 		}
 	case <-time.After(1 * time.Second):
 		t.Errorf("timeout waiting for output channel to close")
@@ -609,12 +719,22 @@ func TestHTTPPostComponent_ExecuteWithStringPayload(t *testing.T) {
 	}
 	close(input)
 
-	_, err = component.Execute(ctx, input)
+	output, err := component.Execute(ctx, input)
 	if err != nil {
 		t.Fatalf("failed to execute component: %v", err)
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case data, ok := <-output:
+		if !ok {
+			t.Fatal("expected response output but channel was closed")
+		}
+		if string(data.Payload.([]byte)) != "" {
+			t.Errorf("expected empty response payload, got %q", string(data.Payload.([]byte)))
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for HTTP POST response output")
+	}
 
 	if receivedBody != testPayload {
 		t.Errorf("expected body '%s', got '%s'", testPayload, receivedBody)

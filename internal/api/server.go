@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -90,6 +89,11 @@ type ResourceMonitor struct {
 	memoryUsage      float64
 	cpuUsage         float64
 	checkInterval    time.Duration
+	now              func() time.Time
+	readProcessRSS   func() (uint64, error)
+	readMemoryLimit  func() (uint64, error)
+	readProcessCPU   func() (float64, error)
+	readCPUCapacity  func() (float64, error)
 }
 
 type Server struct {
@@ -181,11 +185,7 @@ func NewServer(db *sql.DB, cfg *config.Config) *Server {
 			maxRunning:   int64(backpressureConfig.MaxConcurrentTasks),
 			maxQueueSize: backpressureConfig.MaxQueueSize,
 		},
-		resourceMonitor: &ResourceMonitor{
-			maxMemoryPercent: backpressureConfig.MaxMemoryUsagePercent,
-			maxCPUPercent:    backpressureConfig.MaxCPUUsagePercent,
-			checkInterval:    5 * time.Second,
-		},
+		resourceMonitor: newResourceMonitor(backpressureConfig.MaxMemoryUsagePercent, backpressureConfig.MaxCPUUsagePercent, 5*time.Second),
 	}
 
 	// Initialize services
@@ -313,7 +313,11 @@ func (s *Server) backpressureMiddleware(next http.Handler) http.Handler {
 // Rate limiting middleware per user
 func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		userID := r.Context().Value("userID").(int)
+		userID, ok := auth.UserIDFromContext(r.Context())
+		if !ok {
+			respondWithError(w, http.StatusUnauthorized, "Authentication context missing")
+			return
+		}
 
 		limiter := s.rateLimiter.GetLimiter(userID)
 		if !limiter.Allow() {
@@ -345,8 +349,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), "userID", userID)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		next.ServeHTTP(w, r.WithContext(auth.WithUserID(r.Context(), userID)))
 	})
 }
 
@@ -457,36 +460,16 @@ func (tq *TaskQueue) GetStats() (int, int64) {
 
 // Resource Monitor methods
 func (rm *ResourceMonitor) IsOverloaded() bool {
+	rm.ensureFreshStats()
+
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
-
-	now := time.Now()
-	if now.Sub(rm.lastMemoryCheck) > rm.checkInterval {
-		rm.mu.RUnlock()
-		rm.updateResourceUsage()
-		rm.mu.RLock()
-	}
-
 	return rm.memoryUsage > rm.maxMemoryPercent || rm.cpuUsage > rm.maxCPUPercent
 }
 
-func (rm *ResourceMonitor) updateResourceUsage() {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
-
-	// Update memory usage
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	rm.memoryUsage = float64(m.Sys) / (1024 * 1024 * 1024) * 100 // Convert to GB percentage (simplified)
-	rm.lastMemoryCheck = time.Now()
-
-	// CPU usage is more complex to calculate accurately, using a simplified approach
-	// In production, you might want to use a proper system monitoring library
-	rm.cpuUsage = 0 // Placeholder - implement proper CPU monitoring
-	rm.lastCPUCheck = time.Now()
-}
-
 func (rm *ResourceMonitor) GetStats() (float64, float64) {
+	rm.ensureFreshStats()
+
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 	return rm.memoryUsage, rm.cpuUsage
@@ -711,7 +694,11 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := r.Context().Value("userID").(int)
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		respondWithError(w, http.StatusUnauthorized, "Authentication context missing")
+		return
+	}
 
 	// Check if we can process immediately or need to queue
 	if s.taskQueue.TryStartTask() {
@@ -774,7 +761,11 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 // @Router /tasks/{id} [get]
 func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "id")
-	userID := r.Context().Value("userID").(int)
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		respondWithError(w, http.StatusUnauthorized, "Authentication context missing")
+		return
+	}
 
 	task, err := s.taskService.GetTask(taskID, userID)
 	if err != nil {
@@ -800,7 +791,11 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 // @Router /tasks/{id}/stop [post]
 func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "id")
-	userID := r.Context().Value("userID").(int)
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		respondWithError(w, http.StatusUnauthorized, "Authentication context missing")
+		return
+	}
 
 	if err := s.taskService.StopTask(taskID, userID); err != nil {
 		log.Error().Err(err).Str("task_id", taskID).Msg("Failed to stop task")
@@ -824,7 +819,11 @@ func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} ErrorResponse
 // @Router /tasks [get]
 func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value("userID").(int)
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		respondWithError(w, http.StatusUnauthorized, "Authentication context missing")
+		return
+	}
 
 	tasks, err := s.taskService.ListTasks(userID)
 	if err != nil {

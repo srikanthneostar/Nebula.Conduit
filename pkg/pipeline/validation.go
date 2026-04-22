@@ -174,18 +174,15 @@ func validateHTTPPostConfig(config ComponentConfig) error {
 		return fmt.Errorf("HTTP_POST_Component has invalid URL: %w", err)
 	}
 
-	contentTypeParam, ok := config.Parameters["content_type"]
-	if !ok {
-		return fmt.Errorf("HTTP_POST_Component requires 'content_type' parameter")
-	}
+	if contentTypeParam, ok := config.Parameters["content_type"]; ok {
+		contentType, ok := contentTypeParam.(string)
+		if !ok {
+			return fmt.Errorf("HTTP_POST_Component 'content_type' must be a string")
+		}
 
-	contentType, ok := contentTypeParam.(string)
-	if !ok {
-		return fmt.Errorf("HTTP_POST_Component 'content_type' must be a string")
-	}
-
-	if contentType == "" {
-		return fmt.Errorf("HTTP_POST_Component 'content_type' cannot be empty")
+		if contentType == "" {
+			return fmt.Errorf("HTTP_POST_Component 'content_type' cannot be empty")
+		}
 	}
 
 	return nil

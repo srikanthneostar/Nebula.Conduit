@@ -158,7 +158,7 @@ func TestRegisterComponents_HTTPPostIntegration(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name: "invalid HTTP POST missing content_type",
+			name: "valid HTTP POST missing content_type uses default",
 			config: pipeline.ComponentConfig{
 				ID:   "post-4",
 				Type: pipeline.ComponentTypeHTTPPost,
@@ -166,7 +166,7 @@ func TestRegisterComponents_HTTPPostIntegration(t *testing.T) {
 					"url": "https://api.example.com/data",
 				},
 			},
-			expectError: true,
+			expectError: false,
 		},
 	}
 

@@ -76,35 +76,24 @@ func (h *HTTPGetComponent) Execute(ctx context.Context, input <-chan pipeline.Da
 	go func() {
 		defer close(output)
 
-		// Check if we have input data (processor mode with template variables)
-		select {
-		case data, ok := <-input:
-			if ok {
-				// Process with input data for template variables
-				if err := h.fetchAndSendWithData(ctx, data, output); err != nil {
-					if !h.config.ContinueOnError {
+		// Graph wiring determines mode: nil input means source mode, non-nil input
+		// means processor mode and we must wait for upstream data deterministically.
+		if input != nil {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case data, ok := <-input:
+					if !ok {
 						return
 					}
-				}
-				// Continue reading from input channel for more data
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case data, ok := <-input:
-						if !ok {
+					if err := h.fetchAndSendWithData(ctx, data, output); err != nil {
+						if !h.config.ContinueOnError {
 							return
-						}
-						if err := h.fetchAndSendWithData(ctx, data, output); err != nil {
-							if !h.config.ContinueOnError {
-								return
-							}
 						}
 					}
 				}
 			}
-		default:
-			// No input, run as source component
 		}
 
 		// If interval is set, run periodically; otherwise run once
@@ -566,10 +555,6 @@ func (h *HTTPPostComponent) extractJWTFromResponse(responseBody []byte, data *pi
 func (h *HTTPPostComponent) Validate() error {
 	if h.url == "" {
 		return fmt.Errorf("url is required")
-	}
-
-	if h.contentType == "" {
-		return fmt.Errorf("content_type is required")
 	}
 
 	// Validate URL format

@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Xecutables/Nebula.Conduit/internal/auth"
 	"github.com/Xecutables/Nebula.Conduit/internal/models"
 )
 
@@ -79,7 +79,7 @@ func TestHandleCreateTask_QueuesPersistedTask(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewReader(body))
-	req = req.WithContext(context.WithValue(req.Context(), "userID", 42))
+	req = req.WithContext(auth.WithUserID(req.Context(), 42))
 	rec := httptest.NewRecorder()
 
 	server.handleCreateTask(rec, req)
@@ -141,7 +141,7 @@ func TestHandleCreateTask_QueueOverflowDeletesPendingTask(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewReader(body))
-	req = req.WithContext(context.WithValue(req.Context(), "userID", 7))
+	req = req.WithContext(auth.WithUserID(req.Context(), 7))
 	rec := httptest.NewRecorder()
 
 	server.handleCreateTask(rec, req)
@@ -192,5 +192,128 @@ func TestTaskQueueWorker_WaitsForCapacityWithoutDroppingTask(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected queued task to start after capacity was released")
+	}
+}
+
+func TestResourceMonitor_UpdateResourceUsageUsesRealLimits(t *testing.T) {
+	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
+	monitor := &ResourceMonitor{
+		maxMemoryPercent: 80,
+		maxCPUPercent:    80,
+		checkInterval:    5 * time.Second,
+		now: func() time.Time {
+			return now
+		},
+		readProcessRSS: func() (uint64, error) {
+			return 512 * 1024 * 1024, nil
+		},
+		readMemoryLimit: func() (uint64, error) {
+			return 2 * 1024 * 1024 * 1024, nil
+		},
+		readProcessCPU: func() (float64, error) {
+			return 160, nil
+		},
+		readCPUCapacity: func() (float64, error) {
+			return 4, nil
+		},
+	}
+
+	monitor.updateResourceUsage()
+
+	memUsage, cpuUsage := monitor.GetStats()
+	if memUsage != 25 {
+		t.Fatalf("expected memory usage 25, got %v", memUsage)
+	}
+	if cpuUsage != 40 {
+		t.Fatalf("expected cpu usage 40, got %v", cpuUsage)
+	}
+}
+
+func TestResourceMonitor_IsOverloadedRefreshesStaleStats(t *testing.T) {
+	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
+	callCount := 0
+
+	monitor := &ResourceMonitor{
+		maxMemoryPercent: 80,
+		maxCPUPercent:    80,
+		checkInterval:    5 * time.Second,
+		lastMemoryCheck:  now.Add(-10 * time.Second),
+		lastCPUCheck:     now.Add(-10 * time.Second),
+		now: func() time.Time {
+			return now
+		},
+		readProcessRSS: func() (uint64, error) {
+			callCount++
+			return 9, nil
+		},
+		readMemoryLimit: func() (uint64, error) {
+			return 10, nil
+		},
+		readProcessCPU: func() (float64, error) {
+			return 10, nil
+		},
+		readCPUCapacity: func() (float64, error) {
+			return 1, nil
+		},
+	}
+
+	if !monitor.IsOverloaded() {
+		t.Fatal("expected resource monitor to report overload after refreshing stats")
+	}
+	if callCount == 0 {
+		t.Fatal("expected IsOverloaded to refresh stale resource stats")
+	}
+}
+
+type stubAuthService struct {
+	validateTokenFunc func(token string) (int, error)
+}
+
+func (s *stubAuthService) Register(username, password, email string) error {
+	return nil
+}
+
+func (s *stubAuthService) Login(username, password string) (string, error) {
+	return "", nil
+}
+
+func (s *stubAuthService) ValidateToken(token string) (int, error) {
+	if s.validateTokenFunc != nil {
+		return s.validateTokenFunc(token)
+	}
+	return 0, nil
+}
+
+func TestStandaloneAuthMiddleware_UsesSharedUserIDContextKey(t *testing.T) {
+	middleware := auth.AuthMiddleware(&stubAuthService{
+		validateTokenFunc: func(token string) (int, error) {
+			if token != "token-123" {
+				t.Fatalf("expected token token-123, got %q", token)
+			}
+			return 99, nil
+		},
+	})
+
+	var gotUserID int
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := auth.UserIDFromContext(r.Context())
+		if !ok {
+			t.Fatal("expected user id in request context")
+		}
+		gotUserID = userID
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/tasks", nil)
+	req.Header.Set("Authorization", "Bearer token-123")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected status 204, got %d", rec.Code)
+	}
+	if gotUserID != 99 {
+		t.Fatalf("expected propagated user id 99, got %d", gotUserID)
 	}
 }

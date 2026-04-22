@@ -107,7 +107,7 @@ func TestValidateHTTPPostConfig(t *testing.T) {
 			errMsg:  "requires 'url' parameter",
 		},
 		{
-			name: "missing content_type parameter",
+			name: "missing content_type parameter uses default",
 			config: ComponentConfig{
 				ID:   "http-post-1",
 				Type: ComponentTypeHTTPPost,
@@ -115,8 +115,7 @@ func TestValidateHTTPPostConfig(t *testing.T) {
 					"url": "https://api.example.com/data",
 				},
 			},
-			wantErr: true,
-			errMsg:  "requires 'content_type' parameter",
+			wantErr: false,
 		},
 		{
 			name: "empty content_type",
