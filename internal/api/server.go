@@ -69,10 +69,15 @@ type UserRateLimiter struct {
 // Task queue for managing concurrent execution
 type TaskQueue struct {
 	mu           sync.RWMutex
-	queue        chan *models.TaskRequest
+	queue        chan *queuedTask
 	running      int64
 	maxRunning   int64
 	maxQueueSize int
+}
+
+type queuedTask struct {
+	TaskID string
+	UserID int
 }
 
 // Resource monitor for system health
@@ -172,7 +177,7 @@ func NewServer(db *sql.DB, cfg *config.Config) *Server {
 			burst: backpressureConfig.RateLimitBurst,
 		},
 		taskQueue: &TaskQueue{
-			queue:        make(chan *models.TaskRequest, backpressureConfig.MaxQueueSize),
+			queue:        make(chan *queuedTask, backpressureConfig.MaxQueueSize),
 			maxRunning:   int64(backpressureConfig.MaxConcurrentTasks),
 			maxQueueSize: backpressureConfig.MaxQueueSize,
 		},
@@ -399,7 +404,7 @@ func (rl *UserRateLimiter) GetLimiter(userID int) *rate.Limiter {
 }
 
 // Task Queue methods
-func (tq *TaskQueue) Enqueue(req *models.TaskRequest) error {
+func (tq *TaskQueue) Enqueue(task *queuedTask) error {
 	tq.mu.RLock()
 	queueLen := len(tq.queue)
 	tq.mu.RUnlock()
@@ -409,7 +414,7 @@ func (tq *TaskQueue) Enqueue(req *models.TaskRequest) error {
 	}
 
 	select {
-	case tq.queue <- req:
+	case tq.queue <- task:
 		return nil
 	default:
 		return fmt.Errorf("task queue is full")
@@ -419,6 +424,19 @@ func (tq *TaskQueue) Enqueue(req *models.TaskRequest) error {
 func (tq *TaskQueue) CanAcceptTask() bool {
 	running := atomic.LoadInt64(&tq.running)
 	return running < tq.maxRunning
+}
+
+func (tq *TaskQueue) TryStartTask() bool {
+	for {
+		running := atomic.LoadInt64(&tq.running)
+		if running >= tq.maxRunning {
+			return false
+		}
+
+		if atomic.CompareAndSwapInt64(&tq.running, running, running+1) {
+			return true
+		}
+	}
 }
 
 func (tq *TaskQueue) IncrementRunning() {
@@ -477,34 +495,32 @@ func (rm *ResourceMonitor) GetStats() (float64, float64) {
 // Background workers
 func (s *Server) startTaskQueueWorker() {
 	go func() {
-		for req := range s.taskQueue.queue {
-			if s.taskQueue.CanAcceptTask() {
-				s.taskQueue.IncrementRunning()
-				go func(taskReq *models.TaskRequest) {
-					defer s.taskQueue.DecrementRunning()
-
-					// Execute task through service
-					userID := 1 // This should come from the request context
-					_, err := s.taskService.CreateTask(taskReq.Script, taskReq.Args, taskReq.Env, userID)
-
-					if err != nil {
-						s.circuitBreaker.RecordFailure()
-						log.Error().Err(err).Msg("Task execution failed")
-					} else {
-						s.circuitBreaker.RecordSuccess()
-					}
-				}(req)
-			} else {
-				// Put back in queue if we can't process now
-				select {
-				case s.taskQueue.queue <- req:
-				default:
-					log.Warn().Msg("Dropped task due to queue overflow")
-				}
-				time.Sleep(100 * time.Millisecond) // Brief pause before retry
+		for task := range s.taskQueue.queue {
+			for !s.taskQueue.TryStartTask() {
+				time.Sleep(100 * time.Millisecond)
 			}
+
+			s.launchTask(task)
 		}
 	}()
+}
+
+func (s *Server) launchTask(task *queuedTask) {
+	go func(item *queuedTask) {
+		defer s.taskQueue.DecrementRunning()
+
+		if err := s.taskService.RunTask(item.TaskID); err != nil {
+			s.circuitBreaker.RecordFailure()
+			log.Error().
+				Err(err).
+				Str("task_id", item.TaskID).
+				Int("user_id", item.UserID).
+				Msg("Task execution failed")
+			return
+		}
+
+		s.circuitBreaker.RecordSuccess()
+	}(task)
 }
 
 func (s *Server) startResourceMonitor() {
@@ -681,7 +697,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 // @Security BearerAuth
 // @Param request body models.TaskRequest true "Task details"
 // @Success 201 {object} models.Task
-// @Success 202 {object} MessageResponse "Task queued due to backpressure"
+// @Success 202 {object} models.Task "Task queued due to backpressure"
 // @Failure 400 {object} ErrorResponse
 // @Failure 401 {object} ErrorResponse
 // @Failure 429 {object} ErrorResponse "Rate limit exceeded"
@@ -698,32 +714,50 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("userID").(int)
 
 	// Check if we can process immediately or need to queue
-	if s.taskQueue.CanAcceptTask() {
+	if s.taskQueue.TryStartTask() {
 		// Process immediately
-		task, err := s.taskService.CreateTask(req.Script, req.Args, req.Env, userID)
+		task, err := s.taskService.CreatePendingTask(req.Script, req.Args, req.Env, userID)
 		if err != nil {
+			s.taskQueue.DecrementRunning()
 			s.circuitBreaker.RecordFailure()
 			log.Error().Err(err).Str("script", req.Script).Msg("Failed to create task")
 			respondWithError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
-		s.circuitBreaker.RecordSuccess()
+		s.launchTask(&queuedTask{TaskID: task.ID, UserID: userID})
 		log.Info().Str("task_id", task.ID).Str("script", req.Script).Msg("Task created immediately")
 		respondWithJSON(w, http.StatusCreated, task)
-	} else {
-		// Queue the task
-		if err := s.taskQueue.Enqueue(&req); err != nil {
-			log.Warn().Err(err).Str("script", req.Script).Msg("Failed to queue task")
-			respondWithError(w, http.StatusServiceUnavailable, "Task queue is full, please try again later")
-			return
+		return
+	}
+
+	task, err := s.taskService.CreatePendingTask(req.Script, req.Args, req.Env, userID)
+	if err != nil {
+		s.circuitBreaker.RecordFailure()
+		log.Error().Err(err).Str("script", req.Script).Msg("Failed to create queued task")
+		respondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if err := s.taskQueue.Enqueue(&queuedTask{TaskID: task.ID, UserID: userID}); err != nil {
+		if deleteErr := s.taskService.DeletePendingTask(task.ID); deleteErr != nil {
+			log.Error().
+				Err(deleteErr).
+				Str("task_id", task.ID).
+				Msg("Failed to delete pending task after queue rejection")
 		}
 
-		log.Info().Str("script", req.Script).Msg("Task queued due to backpressure")
-		respondWithJSON(w, http.StatusAccepted, MessageResponse{
-			Message: "Task queued for execution due to high load",
-		})
+		log.Warn().
+			Err(err).
+			Str("script", req.Script).
+			Str("task_id", task.ID).
+			Msg("Failed to queue task")
+		respondWithError(w, http.StatusServiceUnavailable, "Task queue is full, please try again later")
+		return
 	}
+
+	log.Info().Str("task_id", task.ID).Str("script", req.Script).Msg("Task queued due to backpressure")
+	respondWithJSON(w, http.StatusAccepted, task)
 }
 
 // handleGetTask godoc

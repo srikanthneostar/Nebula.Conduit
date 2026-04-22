@@ -312,28 +312,21 @@ func (e *defaultExecutor) startComponents(instance *PipelineInstance, pipeline P
 			fmt.Printf("  [%d/%d] Component %s (%s) has %d input(s): %v\n",
 				i+1, len(pipeline.Components), compConfig.ID, componentType, len(sources), sources)
 
-			// When a component has incoming connections, it reads from its own channel
-			// if any of its upstream components write to it via fanout (multiple targets)
-			// Otherwise, it reads from the upstream component's channel
-			readFromOwnChannel := false
+			// Mixed topologies need to preserve every inbound edge. Fanout sources write to
+			// the target-owned channel, while single-target sources are read directly.
+			hasFanoutInput := false
 			for _, sourceID := range sources {
 				if len(graph[sourceID]) > 1 {
-					// Source has multiple targets, so it uses fanout
-					readFromOwnChannel = true
-					break
+					if !hasFanoutInput {
+						inputChans = append(inputChans, instance.Channels[compConfig.ID])
+						hasFanoutInput = true
+						fmt.Printf("    → Reading fanout inputs from own channel\n")
+					}
+					continue
 				}
-			}
 
-			if readFromOwnChannel {
-				// Fanout case: read from own channel
-				inputChans = append(inputChans, instance.Channels[compConfig.ID])
-				fmt.Printf("    → Reading from own channel (fanout mode)\n")
-			} else {
-				// Normal case: read from source channels
-				for _, sourceID := range sources {
-					inputChans = append(inputChans, instance.Channels[sourceID])
-					fmt.Printf("    → Reading from %s's channel\n", sourceID)
-				}
+				inputChans = append(inputChans, instance.Channels[sourceID])
+				fmt.Printf("    → Reading from %s's channel\n", sourceID)
 			}
 		} else {
 			fmt.Printf("  [%d/%d] Component %s (%s) has NO inputs (source component)\n",

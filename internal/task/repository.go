@@ -17,6 +17,7 @@ type Repository interface {
 	CreateTask(task *models.Task) error
 	GetTask(id string) (*models.Task, error)
 	UpdateTask(task *models.Task) error
+	DeleteTask(id string) error
 	ListTasks(userID int) ([]*models.Task, error)
 }
 
@@ -84,6 +85,23 @@ func (r *SQLiteRepository) UpdateTask(task *models.Task) error {
 		task.Output, task.Error, task.ExitCode, task.StartedAt, task.EndedAt, task.ID,
 	)
 
+	if err != nil {
+		return err
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrTaskNotFound
+	}
+
+	return nil
+}
+
+func (r *SQLiteRepository) DeleteTask(id string) error {
+	result, err := r.db.Exec(`DELETE FROM tasks WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}

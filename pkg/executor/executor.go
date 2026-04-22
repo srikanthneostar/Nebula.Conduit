@@ -98,7 +98,7 @@ func (e *PythonExecutor) validateScriptPath(scriptName string) (string, error) {
 	return "", fmt.Errorf("script %s not found in allowed paths: %v", scriptName, e.pathConfig.AllowedPaths)
 }
 
-func (e *PythonExecutor) prepareCommand(scriptPath string, args []string) (*exec.Cmd, error) {
+func (e *PythonExecutor) prepareCommand(ctx context.Context, scriptPath string, args []string) (*exec.Cmd, error) {
 	if err := os.Chmod(scriptPath, 0755); err != nil {
 		e.logger.Error().Err(err).Str("script_path", scriptPath).Msg("Failed to set executable permissions for script")
 		return nil, err
@@ -106,7 +106,7 @@ func (e *PythonExecutor) prepareCommand(scriptPath string, args []string) (*exec
 
 	// Use configured Python command to run the script
 	cmdArgs := append([]string{scriptPath}, args...)
-	cmd := exec.Command(e.pythonCommand, cmdArgs...)
+	cmd := exec.CommandContext(ctx, e.pythonCommand, cmdArgs...)
 	cmd.Dir = filepath.Dir(scriptPath)
 
 	return cmd, nil
@@ -138,7 +138,12 @@ func (e *PythonExecutor) ExecuteWithTimeout(ctx context.Context, scriptName stri
 
 	// Run in background with timeout
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), e.timeout)
+		baseCtx := ctx
+		if baseCtx == nil {
+			baseCtx = context.Background()
+		}
+
+		ctx, cancel := context.WithTimeout(baseCtx, e.timeout)
 		defer cancel()
 		e.RunTask(ctx, taskID, scriptName, args, env, userID)
 	}()
@@ -149,11 +154,12 @@ func (e *PythonExecutor) ExecuteWithTimeout(ctx context.Context, scriptName stri
 func (e *PythonExecutor) RunTask(ctx context.Context, taskID, scriptName string, args []string, env []string, userID int) {
 	scriptPath, err := e.validateScriptPath(scriptName)
 	if err != nil {
+		e.updateTaskFailure(taskID, err)
 		e.logger.Error().Err(err).Str("task_id", taskID).Msg("Script validation failed")
 		return
 	}
 
-	cmd, err := e.prepareCommand(scriptPath, args)
+	cmd, err := e.prepareCommand(ctx, scriptPath, args)
 	e.logger.Info().Str("task_id", taskID).Str("script_path", scriptPath).Msg("Preparing command for task")
 	if err != nil {
 		e.updateTaskFailure(taskID, err)
@@ -167,6 +173,7 @@ func (e *PythonExecutor) RunTask(ctx context.Context, taskID, scriptName string,
 
 	// Store command
 	e.runningTasks.Store(taskID, cmd)
+	defer e.runningTasks.Delete(taskID)
 
 	// Update status to running
 	if err := e.updateTaskStatus(taskID, models.StatusRunning); err != nil {
@@ -178,26 +185,21 @@ func (e *PythonExecutor) RunTask(ctx context.Context, taskID, scriptName string,
 	e.logger.Info().Str("task_id", taskID).Msg("Executing task")
 	output, err := cmd.CombinedOutput()
 
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		e.updateTaskCancelled(taskID, ctxErr)
+		e.logger.Warn().Str("task_id", taskID).Err(ctxErr).Msg("Task cancelled before terminal success/failure update")
+		return
+	}
+
 	// Update task status
 	if err != nil {
 		e.updateTaskFailure(taskID, err, output)
 		e.logger.Error().Str("task_id", taskID).Err(err).Msg(fmt.Sprintf("Task execution failed : %s", output))
-	} else {
-		e.updateTaskSuccess(taskID, output)
-		e.logger.Info().Str("task_id", taskID).Msg("Task completed successfully")
-	}
-
-	// Remove from running tasks
-	e.runningTasks.Delete(taskID)
-
-	// Handle context cancellation
-	select {
-	case <-ctx.Done():
-		e.updateTaskCancelled(taskID, ctx.Err())
 		return
-	default:
 	}
 
+	e.updateTaskSuccess(taskID, output)
+	e.logger.Info().Str("task_id", taskID).Msg("Task completed successfully")
 }
 
 func (e *PythonExecutor) StopTask(taskID string) error {
@@ -214,15 +216,9 @@ func (e *PythonExecutor) StopTask(taskID string) error {
 	// Send SIGTERM first for graceful shutdown
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		e.logger.Warn().Str("task_id", taskID).Err(err).Msg("Failed to send SIGTERM, trying SIGKILL")
-		if err := cmd.Process.Kill(); err != nil {
+		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			return err
 		}
-	}
-
-	// Wait for process to exit
-	_, err := cmd.Process.Wait()
-	if err != nil {
-		return err
 	}
 
 	// Update task status
@@ -242,57 +238,63 @@ func (e *PythonExecutor) updateTaskStatus(taskID string, status models.TaskStatu
 }
 
 func (e *PythonExecutor) updateTaskSuccess(taskID string, output []byte) error {
-	task, err := e.taskRepo.GetTask(taskID)
-	if err != nil {
-		e.logger.Error().Err(err).Str("task_id", taskID).Msg("Failed to get task for success update")
-		return err
-	}
-
-	task.Status = models.StatusCompleted
-	task.Output = string(output)
-	task.ExitCode = 0
-	task.EndedAt = time.Now()
-
-	return e.taskRepo.UpdateTask(task)
+	return e.updateTaskTerminalState(taskID, func(task *models.Task) {
+		task.Status = models.StatusCompleted
+		task.Output = string(output)
+		task.ExitCode = 0
+		task.EndedAt = time.Now()
+	})
 }
 
 func (e *PythonExecutor) updateTaskFailure(taskID string, execErr error, output ...[]byte) error {
-	task, err := e.taskRepo.GetTask(taskID)
-	if err != nil {
-		e.logger.Error().Err(err).Str("task_id", taskID).Msg("Failed to get task for failure update")
-		return err
-	}
+	return e.updateTaskTerminalState(taskID, func(task *models.Task) {
+		task.Status = models.StatusFailed
+		task.Error = execErr.Error()
+		task.EndedAt = time.Now()
 
-	task.Status = models.StatusFailed
-	task.Error = execErr.Error()
-	task.EndedAt = time.Now()
+		if len(output) > 0 {
+			task.Output = string(output[0])
+		}
 
-	if len(output) > 0 {
-		task.Output = string(output[0])
-	}
-
-	if exitErr, ok := execErr.(*exec.ExitError); ok {
-		task.ExitCode = exitErr.ExitCode()
-	} else {
-		task.ExitCode = -1
-	}
-
-	return e.taskRepo.UpdateTask(task)
+		if exitErr, ok := execErr.(*exec.ExitError); ok {
+			task.ExitCode = exitErr.ExitCode()
+		} else {
+			task.ExitCode = -1
+		}
+	})
 }
 
 func (e *PythonExecutor) updateTaskCancelled(taskID string, reason error) error {
+	return e.updateTaskTerminalState(taskID, func(task *models.Task) {
+		task.Status = models.StatusCancelled
+		task.Error = reason.Error()
+		task.EndedAt = time.Now()
+		task.ExitCode = -2
+	})
+}
+
+func (e *PythonExecutor) updateTaskTerminalState(taskID string, update func(task *models.Task)) error {
 	task, err := e.taskRepo.GetTask(taskID)
 	if err != nil {
-		e.logger.Error().Err(err).Str("task_id", taskID).Msg("Failed to get task for cancellation update")
+		e.logger.Error().Err(err).Str("task_id", taskID).Msg("Failed to get task for terminal status update")
 		return err
 	}
 
-	task.Status = models.StatusCancelled
-	task.Error = reason.Error()
-	task.EndedAt = time.Now()
-	task.ExitCode = -2
+	if isTerminalStatus(task.Status) {
+		return nil
+	}
 
+	update(task)
 	return e.taskRepo.UpdateTask(task)
+}
+
+func isTerminalStatus(status models.TaskStatus) bool {
+	switch status {
+	case models.StatusCompleted, models.StatusFailed, models.StatusCancelled:
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *PythonExecutor) GetRunningTasks() []string {

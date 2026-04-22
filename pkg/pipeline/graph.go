@@ -4,6 +4,43 @@ import (
 	"fmt"
 )
 
+type componentCapabilities struct {
+	canOriginateData bool
+	canAcceptInput   bool
+	canEmitOutput    bool
+	canTerminateData bool
+}
+
+var componentCapabilitiesByType = map[ComponentType]componentCapabilities{
+	ComponentTypeHTTPGet:            {canOriginateData: true, canAcceptInput: true, canEmitOutput: true, canTerminateData: false},
+	ComponentTypeSQLQuery:           {canOriginateData: true, canAcceptInput: false, canEmitOutput: true, canTerminateData: false},
+	ComponentTypeCSVReader:          {canOriginateData: true, canAcceptInput: false, canEmitOutput: true, canTerminateData: false},
+	ComponentTypeKafkaConsumer:      {canOriginateData: true, canAcceptInput: false, canEmitOutput: true, canTerminateData: false},
+	ComponentTypeRabbitMQConsumer:   {canOriginateData: true, canAcceptInput: false, canEmitOutput: true, canTerminateData: false},
+	ComponentTypeHL7Reader:          {canOriginateData: true, canAcceptInput: false, canEmitOutput: true, canTerminateData: false},
+	ComponentTypeTCPRead:            {canOriginateData: true, canAcceptInput: false, canEmitOutput: true, canTerminateData: false},
+	ComponentTypeS3Reader:           {canOriginateData: true, canAcceptInput: false, canEmitOutput: true, canTerminateData: false},
+	ComponentTypeMinIOReader:        {canOriginateData: true, canAcceptInput: false, canEmitOutput: true, canTerminateData: false},
+	ComponentTypeAzureBlobReader:    {canOriginateData: true, canAcceptInput: false, canEmitOutput: true, canTerminateData: false},
+	ComponentTypeLocalStorageReader: {canOriginateData: true, canAcceptInput: false, canEmitOutput: true, canTerminateData: false},
+	ComponentTypePythonCodeBlock:    {canOriginateData: false, canAcceptInput: true, canEmitOutput: true, canTerminateData: false},
+	ComponentTypeLog:                {canOriginateData: false, canAcceptInput: true, canEmitOutput: true, canTerminateData: false},
+	ComponentTypeAttributeUpdate:    {canOriginateData: false, canAcceptInput: true, canEmitOutput: true, canTerminateData: false},
+	ComponentTypeHTTPPost:           {canOriginateData: true, canAcceptInput: true, canEmitOutput: true, canTerminateData: true},
+	ComponentTypeJSONExtractor:      {canOriginateData: false, canAcceptInput: true, canEmitOutput: true, canTerminateData: false},
+	ComponentTypeJSONTransform:      {canOriginateData: false, canAcceptInput: true, canEmitOutput: true, canTerminateData: false},
+	ComponentTypePrintLog:           {canOriginateData: false, canAcceptInput: true, canEmitOutput: true, canTerminateData: false},
+	ComponentTypeKafkaProducer:      {canOriginateData: false, canAcceptInput: true, canEmitOutput: false, canTerminateData: true},
+	ComponentTypeRabbitMQProducer:   {canOriginateData: false, canAcceptInput: true, canEmitOutput: false, canTerminateData: true},
+	ComponentTypeTCPWrite:           {canOriginateData: false, canAcceptInput: true, canEmitOutput: false, canTerminateData: true},
+	ComponentTypeLogSink:            {canOriginateData: false, canAcceptInput: true, canEmitOutput: false, canTerminateData: true},
+	ComponentTypeLychgateResponse:   {canOriginateData: false, canAcceptInput: true, canEmitOutput: false, canTerminateData: true},
+	ComponentTypeS3Writer:           {canOriginateData: false, canAcceptInput: true, canEmitOutput: false, canTerminateData: true},
+	ComponentTypeMinIOWriter:        {canOriginateData: false, canAcceptInput: true, canEmitOutput: false, canTerminateData: true},
+	ComponentTypeAzureBlobWriter:    {canOriginateData: false, canAcceptInput: true, canEmitOutput: false, canTerminateData: true},
+	ComponentTypeLocalStorageWriter: {canOriginateData: false, canAcceptInput: true, canEmitOutput: false, canTerminateData: true},
+}
+
 // ValidateGraph validates the pipeline component graph structure
 // It checks for:
 // - At least one source component
@@ -37,10 +74,10 @@ func validateComponentPresence(def PipelineDefinition) error {
 		hasIncoming[conn.TargetComponentID] = true
 	}
 
-	// Check for at least one component without incoming connections (topology source)
+	// Check for at least one topology root that can actually originate data.
 	hasSource := false
 	for _, comp := range def.Components {
-		if !hasIncoming[comp.ID] {
+		if !hasIncoming[comp.ID] && canOriginateData(comp.Type) {
 			hasSource = true
 			break
 		}
@@ -49,18 +86,18 @@ func validateComponentPresence(def PipelineDefinition) error {
 	// Check for at least one component without outgoing connections (topology sink)
 	hasSink := false
 	for _, comp := range def.Components {
-		if !hasOutgoing[comp.ID] {
+		if !hasOutgoing[comp.ID] && canTerminateData(comp.Type) {
 			hasSink = true
 			break
 		}
 	}
 
 	if !hasSource {
-		return fmt.Errorf("pipeline must have at least one source component")
+		return fmt.Errorf("pipeline must have at least one source-capable component without incoming connections")
 	}
 
 	if !hasSink {
-		return fmt.Errorf("pipeline must have at least one sink component")
+		return fmt.Errorf("pipeline must have at least one terminal sink-capable component without outgoing connections")
 	}
 
 	return nil
@@ -141,14 +178,17 @@ func validateTypeCompatibility(def PipelineDefinition) error {
 
 // validateComponentConnection checks if two components can be connected
 func validateComponentConnection(source, target ComponentConfig) error {
+	sourceCapabilities := getComponentCapabilities(source.Type)
+	targetCapabilities := getComponentCapabilities(target.Type)
+
 	// Only strict sink components (those that truly can't output) cannot have outgoing connections
-	if isSinkComponent(source.Type) {
+	if !sourceCapabilities.canEmitOutput {
 		return fmt.Errorf("sink component %s (%s) cannot have outgoing connections",
 			source.ID, source.Type)
 	}
 
 	// Only strict source components (those that truly can't accept input) cannot have incoming connections
-	if isSourceComponent(target.Type) {
+	if !targetCapabilities.canAcceptInput {
 		return fmt.Errorf("source component %s (%s) cannot have incoming connections",
 			target.ID, target.Type)
 	}
@@ -177,53 +217,39 @@ func buildAdjacencyList(def PipelineDefinition) map[string][]string {
 // isSourceComponent returns true if the component type is a strict source
 // (cannot accept incoming connections)
 func isSourceComponent(compType ComponentType) bool {
-	switch compType {
-	case ComponentTypeSQLQuery,
-		ComponentTypeCSVReader,
-		ComponentTypeKafkaConsumer,
-		ComponentTypeRabbitMQConsumer,
-		ComponentTypeHL7Reader,
-		ComponentTypeTCPRead,
-		ComponentTypeS3Reader,
-		ComponentTypeMinIOReader,
-		ComponentTypeAzureBlobReader,
-		ComponentTypeLocalStorageReader:
-		return true
-	default:
-		return false
-	}
+	return !getComponentCapabilities(compType).canAcceptInput
 }
 
 // isSinkComponent returns true if the component type is a strict sink
 // (cannot have outgoing connections)
 func isSinkComponent(compType ComponentType) bool {
-	switch compType {
-	case ComponentTypeKafkaProducer,
-		ComponentTypeRabbitMQProducer,
-		ComponentTypeTCPWrite,
-		ComponentTypeLogSink,
-		ComponentTypeLychgateResponse,
-		ComponentTypeS3Writer,
-		ComponentTypeMinIOWriter,
-		ComponentTypeAzureBlobWriter,
-		ComponentTypeLocalStorageWriter:
-		return true
-	default:
-		return false
-	}
+	return !getComponentCapabilities(compType).canEmitOutput
 }
 
 // isProcessorComponent returns true if the component type is a processor
 func isProcessorComponent(compType ComponentType) bool {
-	switch compType {
-	case ComponentTypePythonCodeBlock,
-		ComponentTypeLog,
-		ComponentTypeAttributeUpdate,
-		ComponentTypeJSONExtractor,
-		ComponentTypeJSONTransform,
-		ComponentTypePrintLog:
-		return true
-	default:
-		return false
+	capabilities := getComponentCapabilities(compType)
+	return capabilities.canAcceptInput && capabilities.canEmitOutput && !capabilities.canOriginateData
+}
+
+func canOriginateData(compType ComponentType) bool {
+	return getComponentCapabilities(compType).canOriginateData
+}
+
+func canTerminateData(compType ComponentType) bool {
+	return getComponentCapabilities(compType).canTerminateData
+}
+
+func getComponentCapabilities(compType ComponentType) componentCapabilities {
+	if capabilities, ok := componentCapabilitiesByType[compType]; ok {
+		return capabilities
+	}
+
+	// Unknown component types default to processor semantics.
+	return componentCapabilities{
+		canOriginateData: false,
+		canAcceptInput:   true,
+		canEmitOutput:    true,
+		canTerminateData: false,
 	}
 }

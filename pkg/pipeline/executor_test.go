@@ -621,3 +621,125 @@ func TestExecutor_FanoutEmptyData(t *testing.T) {
 		t.Errorf("Expected status Completed or Running, got %s. Error: %v", instance.Status, instance.Error)
 	}
 }
+
+func TestExecutor_MixedFanoutAndDirectInputsDeliverAllData(t *testing.T) {
+	factory := NewComponentFactory()
+
+	var mu sync.Mutex
+	sharedSinkData := make([]string, 0)
+	extraSinkData := make([]string, 0)
+
+	factory.Register(ComponentTypeHTTPGet, func(config ComponentConfig) (Component, error) {
+		return &mockSourceComponent{
+			mockComponent: mockComponent{
+				id:            config.ID,
+				componentType: ComponentTypeHTTPGet,
+				config:        config,
+			},
+			startFunc: func(ctx context.Context) (<-chan Data, error) {
+				output := make(chan Data)
+				go func() {
+					defer close(output)
+
+					var payloads []string
+					switch config.ID {
+					case "source-fanout":
+						payloads = []string{"fanout-1", "fanout-2", "fanout-3"}
+					case "source-direct":
+						payloads = []string{"direct-1", "direct-2"}
+					default:
+						payloads = []string{}
+					}
+
+					for _, payload := range payloads {
+						select {
+						case <-ctx.Done():
+							return
+						case output <- Data{Payload: payload}:
+						}
+					}
+				}()
+				return output, nil
+			},
+		}, nil
+	})
+
+	factory.Register(ComponentTypeHTTPPost, func(config ComponentConfig) (Component, error) {
+		return &mockSinkComponent{
+			mockComponent: mockComponent{
+				id:            config.ID,
+				componentType: ComponentTypeHTTPPost,
+				config:        config,
+			},
+			writeFunc: func(ctx context.Context, input <-chan Data) error {
+				for {
+					select {
+					case <-ctx.Done():
+						return nil
+					case data, ok := <-input:
+						if !ok {
+							return nil
+						}
+
+						payload, _ := data.Payload.(string)
+						mu.Lock()
+						if config.ID == "sink-shared" {
+							sharedSinkData = append(sharedSinkData, payload)
+						} else if config.ID == "sink-extra" {
+							extraSinkData = append(extraSinkData, payload)
+						}
+						mu.Unlock()
+					}
+				}
+			},
+		}, nil
+	})
+
+	executor := NewExecutor(factory)
+
+	pipeline := PipelineDefinition{
+		ID:   "mixed-fanout-pipeline",
+		Name: "Mixed Fanout Pipeline",
+		Components: []ComponentConfig{
+			{ID: "source-fanout", Type: ComponentTypeHTTPGet},
+			{ID: "source-direct", Type: ComponentTypeHTTPGet},
+			{ID: "sink-shared", Type: ComponentTypeHTTPPost},
+			{ID: "sink-extra", Type: ComponentTypeHTTPPost},
+		},
+		Connections: []Connection{
+			{SourceComponentID: "source-fanout", TargetComponentID: "sink-shared"},
+			{SourceComponentID: "source-fanout", TargetComponentID: "sink-extra"},
+			{SourceComponentID: "source-direct", TargetComponentID: "sink-shared"},
+		},
+	}
+
+	instance, err := executor.Execute(context.Background(), pipeline)
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	instance.WaitGroup.Wait()
+	time.Sleep(100 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(extraSinkData) != 3 {
+		t.Fatalf("expected extra sink to receive 3 fanout items, got %d", len(extraSinkData))
+	}
+
+	if len(sharedSinkData) != 5 {
+		t.Fatalf("expected shared sink to receive 5 mixed-topology items, got %d", len(sharedSinkData))
+	}
+
+	seen := make(map[string]int)
+	for _, payload := range sharedSinkData {
+		seen[payload]++
+	}
+
+	for _, expected := range []string{"fanout-1", "fanout-2", "fanout-3", "direct-1", "direct-2"} {
+		if seen[expected] != 1 {
+			t.Fatalf("expected shared sink to receive %q exactly once, got count=%d", expected, seen[expected])
+		}
+	}
+}

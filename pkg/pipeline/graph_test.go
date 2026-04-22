@@ -298,6 +298,25 @@ func TestValidateGraph_MultipleSourcesAndSinks(t *testing.T) {
 	}
 }
 
+func TestValidateGraph_RejectsTopologyRootThatCannotOriginateData(t *testing.T) {
+	def := PipelineDefinition{
+		ID:   "processor-root-pipeline",
+		Name: "Processor Root Pipeline",
+		Components: []ComponentConfig{
+			{ID: "log-1", Type: ComponentTypeLog},
+			{ID: "sink-1", Type: ComponentTypeHTTPPost},
+		},
+		Connections: []Connection{
+			{SourceComponentID: "log-1", TargetComponentID: "sink-1"},
+		},
+	}
+
+	err := ValidateGraph(def)
+	if err == nil {
+		t.Fatal("expected processor-only root pipeline to fail validation")
+	}
+}
+
 func TestIsSourceComponent(t *testing.T) {
 	tests := []struct {
 		compType ComponentType
