@@ -1,0 +1,126 @@
+{
+  "name": "Frappe HR Employee Polling Pipeline",
+  "description": "Polls Frappe HR for employee records modified since last checkpoint, extracts max modified timestamp for next run, transforms fields to Nebula schema, and pushes to Lychgate",
+  "execution_mode": "scheduled",
+  "cron_expression": "*/5 * * * *",
+  "status": "active",
+  "components": [
+    {
+      "id": "frappe-http-get",
+      "type": "http_get",
+      "parameters": {
+        "url": "http://192.168.1.157:8001/api/resource/Employee?fields=[\"name\",\"first_name\",\"last_name\",\"employee_number\",\"date_of_joining\",\"relieving_date\",\"company_email\",\"modified\"]&filters=[[\"modified\",\">\",\"{{max_modified}}\"]]&order_by=modified asc&limit_page_length=100",
+        "headers": {
+          "Authorization": "token <api_key>:<api_secret>",
+          "Accept": "application/json"
+        }
+      },
+      "retry_count": 3,
+      "retry_delay": 5000000000,
+      "continue_on_error": false,
+      "timeout": 30000000000
+    },
+    {
+      "id": "print-log-response",
+      "type": "print_log",
+      "parameters": {
+        "log_level": "info",
+        "message": "Frappe HR API response received"
+      },
+      "retry_count": 0,
+      "continue_on_error": true,
+      "timeout": 10000000000
+    },
+    {
+      "id": "extract-max-modified",
+      "type": "json_extractor",
+      "parameters": {
+        "extractions": [
+          {
+            "array_path": "data",
+            "field": "modified",
+            "operation": "max",
+            "output_key": "max_modified"
+          }
+        ]
+      },
+      "retry_count": 0,
+      "continue_on_error": false,
+      "timeout": 10000000000
+    },
+    {
+      "id": "transform-employee",
+      "type": "json_transform",
+      "parameters": {
+        "array_path": "data",
+        "rules": [
+          {
+            "operation": "rename",
+            "field": "first_name",
+            "to": "firstname"
+          },
+          {
+            "operation": "rename",
+            "field": "last_name",
+            "to": "lastname"
+          },
+          {
+            "operation": "rename",
+            "field": "employee_number",
+            "to": "employeeid"
+          },
+          {
+            "operation": "rename",
+            "field": "date_of_joining",
+            "to": "startdate"
+          },
+          {
+            "operation": "rename",
+            "field": "relieving_date",
+            "to": "enddate"
+          },
+          {
+            "operation": "rename",
+            "field": "company_email",
+            "to": "email"
+          }
+        ]
+      },
+      "retry_count": 0,
+      "continue_on_error": false,
+      "timeout": 10000000000
+    },
+    {
+      "id": "lychgate-sink",
+      "type": "lychgate_response",
+      "parameters": {
+        "system_id": 11,
+        "entity_id": 44,
+        "schema_class": "Employee",
+        "communication_mode": "RabbitMQ"
+      },
+      "retry_count": 3,
+      "retry_delay": 5000000000,
+      "continue_on_error": false,
+      "timeout": 30000000000
+    }
+  ],
+  "connections": [
+    {
+      "source_component_id": "frappe-http-get",
+      "target_component_id": "print-log-response"
+    },
+    {
+      "source_component_id": "print-log-response",
+      "target_component_id": "extract-max-modified"
+    },
+    {
+      "source_component_id": "extract-max-modified",
+      "target_component_id": "transform-employee"
+    },
+    {
+      "source_component_id": "transform-employee",
+      "target_component_id": "lychgate-sink"
+    }
+  ]
+}

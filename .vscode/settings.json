@@ -1,3 +1,81 @@
 {
-  "makefile.configureOnOpen": true
+  "makefile.configureOnOpen": true,
+  // ── Window ──────────────────────────────────────────────
+  "window.title": "${rootName}",
+  "window.commandCenter": false,
+  "window.newWindowDimensions": "inherit",
+  // ── Workbench ───────────────────────────────────────────
+  "workbench.startupEditor": "none",
+  "workbench.tips.enabled": false,
+  "workbench.layoutControl.enabled": false,
+  "workbench.activityBar.location": "top",
+  "workbench.editor.tabSizing": "shrink",
+  "workbench.editor.pinnedTabSizing": "compact",
+  "workbench.editor.highlightModifiedTabs": true,
+  "workbench.editor.enablePreviewFromQuickOpen": false,
+  "workbench.editor.empty.hint": "hidden",
+  "workbench.sideBar.location": "left",
+  "workbench.panel.defaultLocation": "right",
+  "workbench.list.smoothScrolling": true,
+  // ── Editor ──────────────────────────────────────────────
+  "editor.minimap.enabled": false,
+  "editor.glyphMargin": false,
+  "editor.renderLineHighlight": "line",
+  "editor.overviewRulerBorder": false,
+  "editor.scrollBeyondLastLine": false,
+  "editor.cursorBlinking": "smooth",
+  "editor.cursorSmoothCaretAnimation": "on",
+  "editor.cursorWidth": 2,
+  "editor.bracketPairColorization.enabled": true,
+  "editor.bracketPairColorization.independentColorPoolPerBracketType": true,
+  "editor.guides.indentation": false,
+  "editor.lightbulb.enabled": "off",
+  "editor.renderWhitespace": "none",
+  "editor.linkedEditing": true,
+  "editor.stickyScroll.enabled": false,
+  "editor.copyWithSyntaxHighlighting": false,
+  "editor.formatOnSave": true,
+  "editor.smoothScrolling": true,
+  "editor.fontLigatures": true,
+  "editor.lineHeight": 1.6,
+  "editor.letterSpacing": 0.3,
+  "editor.padding.top": 12,
+  "editor.padding.bottom": 12,
+  "editor.semanticHighlighting.enabled": true,
+  // ── Breadcrumbs ─────────────────────────────────────────
+  "breadcrumbs.enabled": true,
+  "breadcrumbs.filePath": "on",
+  "breadcrumbs.symbolPath": "on",
+  // ── Zen mode ────────────────────────────────────────────
+  "zenMode.fullScreen": false,
+  "zenMode.centerLayout": false,
+  // ── Terminal ────────────────────────────────────────────
+  "terminal.integrated.cursorStyle": "line",
+  "terminal.integrated.cursorBlinking": true,
+  "terminal.integrated.smoothScrolling": true,
+  // ── Explorer ────────────────────────────────────────────
+  "explorer.confirmDragAndDrop": false,
+  "explorer.openEditors.visible": 0,
+  "explorer.compactFolders": false,
+  // ── Files ───────────────────────────────────────────────
+  "files.insertFinalNewline": true,
+  "files.trimTrailingWhitespace": true,
+  "files.exclude": {
+    "**/.DS_Store": true,
+    "**/.git": true
+  },
+  // ── Search ──────────────────────────────────────────────
+  "search.smartCase": true,
+  "search.exclude": {
+    "**/vendor": true,
+    "**/node_modules": true,
+    "**/*.whl": true
+  },
+  // ── Go-specific ─────────────────────────────────────────
+  "[go]": {
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "golang.go"
+  },
+  // ── Telemetry ───────────────────────────────────────────
+  "telemetry.telemetryLevel": "off"
 }
