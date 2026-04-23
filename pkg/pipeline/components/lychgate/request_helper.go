@@ -18,10 +18,11 @@ func NewRequestPayload(systemId int, entityId int,
 	now := time.Now()
 
 	request := SystemRequest{
-		ID:              intPtr(0),
-		ObjectID:        intPtr(0),
-		IsProcessed:     boolPtr(false),
-		OriginalRequest: boolPtr(true),
+		ID:               intPtr(0),
+		ObjectID:         intPtr(0),
+		IsProcessed:      boolPtr(false),
+		OriginalRequest:  boolPtr(true),
+		RequestOperation: OperationInsertUpdate,
 		System: &ApplicationSystems{
 			ID: *intPtr(1),
 		},
