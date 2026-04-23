@@ -339,11 +339,11 @@ func (l *LychgateResponseComponent) sendToLychgate(requestPayload *RequestPayloa
 		return fmt.Errorf("unsupported communication mode: %s", l.communicationMode.String())
 	}
 
-	return nil
 }
 
 // publishToRabbitMQ connects using the app_configs values and publishes the
-// serialised RequestPayload to a topic exchange with schemaClass as the routing key.
+// serialised RequestPayload to a topic exchange with the configured routing key.
+// It also ensures the target queue exists and is bound to the exchange.
 func (l *LychgateResponseComponent) publishToRabbitMQ(cfgMap map[string]string, requestPayload *RequestPayload) error {
 	host := cfgMap["Host"]
 	port := cfgMap["Port"]
@@ -380,7 +380,18 @@ func (l *LychgateResponseComponent) publishToRabbitMQ(cfgMap map[string]string, 
 		return fmt.Errorf("failed to declare exchange %q: %w", exchange, err)
 	}
 
-	l.log("debug", fmt.Sprintf("RabbitMQ connected — exchange=%s, topic=%s", exchange, topic))
+	// Ensure the queue exists and is bound to the exchange with the routing key.
+	queueName := topic // use the topic constant as the queue name
+	_, err = ch.QueueDeclare(queueName, true, false, false, false, nil)
+	if err != nil {
+		return fmt.Errorf("failed to declare queue %q: %w", queueName, err)
+	}
+
+	if err := ch.QueueBind(queueName, topic, exchange, false, nil); err != nil {
+		return fmt.Errorf("failed to bind queue %q to exchange %q with key %q: %w", queueName, exchange, topic, err)
+	}
+
+	l.log("debug", fmt.Sprintf("RabbitMQ connected — exchange=%s, queue=%s, routing_key=%s", exchange, queueName, topic))
 
 	body, err := json.Marshal(requestPayload)
 	if err != nil {
@@ -402,7 +413,7 @@ func (l *LychgateResponseComponent) publishToRabbitMQ(cfgMap map[string]string, 
 	}
 
 	l.logWithPayload("info",
-		fmt.Sprintf("Published to RabbitMQ — exchange=%s, topic=%s (%d bytes)", exchange, topic, len(body)),
+		fmt.Sprintf("Published to RabbitMQ — exchange=%s, queue=%s, routing_key=%s (%d bytes)", exchange, queueName, topic, len(body)),
 		string(body))
 	return nil
 }
