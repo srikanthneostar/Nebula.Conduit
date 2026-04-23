@@ -22,6 +22,7 @@ func NewRequestPayload(systemId int, entityId int,
 		ObjectID:         intPtr(0),
 		IsProcessed:      boolPtr(false),
 		OriginalRequest:  boolPtr(true),
+		EntityID:         &entityId,
 		RequestOperation: OperationInsertUpdate,
 		System: &ApplicationSystems{
 			ID: *intPtr(1),

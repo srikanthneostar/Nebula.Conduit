@@ -287,8 +287,8 @@ func (l *LychgateResponseComponent) produceRequest(data pipeline.Data) error {
 
 		requestPayload := NewRequestPayload(l.systemID, l.entityID, string(requestJson), schemaClassPtr)
 
-		l.log("info", fmt.Sprintf("Record %d/%d — sending to %s (system_id=%d, entity_id=%d, topic=%s, message_id=%s)",
-			i+1, len(records), l.communicationMode.String(), l.systemID, l.entityID, topic, *requestPayload.SystemRequests.MessageID))
+		l.log("info", fmt.Sprintf("Record %d/%d — sending to %s (system_id=%d, entity_id=%d,--> ent_id_Req=%d <--, topic=%s, message_id=%s)",
+			i+1, len(records), l.communicationMode.String(), l.systemID, l.entityID, *requestPayload.SystemRequests.EntityID, topic, *requestPayload.SystemRequests.MessageID))
 
 		if err := l.sendToLychgate(requestPayload); err != nil {
 			publishErrs = append(publishErrs, fmt.Sprintf("record %d: %v", i+1, err))
