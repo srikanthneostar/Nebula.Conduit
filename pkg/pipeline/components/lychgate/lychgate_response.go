@@ -188,11 +188,28 @@ func payloadRecords(payload interface{}) ([]interface{}, string, bool) {
 		return []interface{}{payload}, "payload", false
 	}
 
-	if items, ok := interfaceSlice(payload); ok {
+	// If the payload is raw bytes or a string, parse it into a generic JSON value first.
+	// This is the common case when upstream components (e.g. json_transform) marshal
+	// their output back to []byte before forwarding.
+	parsed := payload
+	switch v := payload.(type) {
+	case []byte:
+		var decoded interface{}
+		if err := json.Unmarshal(v, &decoded); err == nil {
+			parsed = decoded
+		}
+	case string:
+		var decoded interface{}
+		if err := json.Unmarshal([]byte(v), &decoded); err == nil {
+			parsed = decoded
+		}
+	}
+
+	if items, ok := interfaceSlice(parsed); ok {
 		return items, "payload", true
 	}
 
-	if payloadMap, ok := payload.(map[string]interface{}); ok {
+	if payloadMap, ok := parsed.(map[string]interface{}); ok {
 		if nested, exists := payloadMap["data"]; exists {
 			if items, ok := interfaceSlice(nested); ok {
 				return items, "payload.data", true
@@ -200,7 +217,7 @@ func payloadRecords(payload interface{}) ([]interface{}, string, bool) {
 		}
 	}
 
-	return []interface{}{payload}, "payload", false
+	return []interface{}{parsed}, "payload", false
 }
 
 func interfaceSlice(value interface{}) ([]interface{}, bool) {
@@ -266,15 +283,21 @@ func (l *LychgateResponseComponent) produceRequest(data pipeline.Data) error {
 		}
 
 		l.log("debug", fmt.Sprintf("Record %d/%d serialized (%d bytes)", i+1, len(records), len(requestJson)))
+		l.logWithPayload("debug", fmt.Sprintf("Record %d/%d requestJson content", i+1, len(records)), string(requestJson))
 
 		requestPayload := NewRequestPayload(l.systemID, l.entityID, string(requestJson), schemaClassPtr)
+
+		l.log("info", fmt.Sprintf("Record %d/%d — sending to %s (system_id=%d, entity_id=%d, topic=%s, message_id=%s)",
+			i+1, len(records), l.communicationMode.String(), l.systemID, l.entityID, topic, *requestPayload.SystemRequests.MessageID))
+
 		if err := l.sendToLychgate(requestPayload); err != nil {
 			publishErrs = append(publishErrs, fmt.Sprintf("record %d: %v", i+1, err))
 			l.log("error", fmt.Sprintf("Failed to publish record %d/%d from %s: %v", i+1, len(records), source, err))
 			continue
 		}
 
-		l.log("info", fmt.Sprintf("Record %d/%d from %s published successfully", i+1, len(records), source))
+		l.log("info", fmt.Sprintf("Record %d/%d from %s published successfully to topic=%s via %s",
+			i+1, len(records), source, topic, l.communicationMode.String()))
 	}
 
 	if len(publishErrs) > 0 {

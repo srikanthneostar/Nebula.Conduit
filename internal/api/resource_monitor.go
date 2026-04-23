@@ -57,18 +57,28 @@ func (rm *ResourceMonitor) updateResourceUsage() {
 	if memoryErr == nil {
 		rm.memoryUsage = memoryUsage
 		rm.lastMemoryCheck = now
+		rm.memoryErrLogged = false
 	}
 	if cpuErr == nil {
 		rm.cpuUsage = cpuUsage
 		rm.lastCPUCheck = now
+		rm.cpuErrLogged = false
+	}
+	shouldLogMemErr := memoryErr != nil && !rm.memoryErrLogged
+	shouldLogCPUErr := cpuErr != nil && !rm.cpuErrLogged
+	if memoryErr != nil {
+		rm.memoryErrLogged = true
+	}
+	if cpuErr != nil {
+		rm.cpuErrLogged = true
 	}
 	rm.mu.Unlock()
 
-	if memoryErr != nil {
-		log.Warn().Err(memoryErr).Msg("Failed to sample process memory usage")
+	if shouldLogMemErr {
+		log.Warn().Err(memoryErr).Msg("Failed to sample process memory usage (further identical warnings suppressed)")
 	}
-	if cpuErr != nil {
-		log.Warn().Err(cpuErr).Msg("Failed to sample process CPU usage")
+	if shouldLogCPUErr {
+		log.Warn().Err(cpuErr).Msg("Failed to sample process CPU usage (further identical warnings suppressed)")
 	}
 }
 
@@ -150,6 +160,16 @@ func defaultProcessRSSBytes() (uint64, error) {
 		}
 		return uint64(value), nil
 	default:
+		// Prefer /proc on Linux (works in minimal containers without ps)
+		if runtime.GOOS == "linux" {
+			if rss, err := readProcRSSBytes(); err == nil {
+				return rss, nil
+			}
+		}
+		// Fall back to ps
+		if !isPSAvailable() {
+			return 0, fmt.Errorf("neither /proc nor ps available for memory sampling")
+		}
 		rssKB, err := runAndParseFloat("ps", "-o", "rss=", "-p", strconv.Itoa(os.Getpid()))
 		if err != nil {
 			return 0, err
@@ -165,6 +185,16 @@ func defaultProcessCPURawPercent() (float64, error) {
 		command := fmt.Sprintf("$p=(Get-Process -Id %d).CPU; Start-Sleep -Milliseconds 250; $q=(Get-Process -Id %d).CPU; (($q-$p)*100/0.25)", os.Getpid(), os.Getpid())
 		return runAndParseFloat("powershell", "-NoProfile", "-Command", command)
 	default:
+		// Prefer /proc on Linux (works in minimal containers without ps)
+		if runtime.GOOS == "linux" {
+			if cpu, err := readProcCPUPercent(); err == nil {
+				return cpu, nil
+			}
+		}
+		// Fall back to ps
+		if !isPSAvailable() {
+			return 0, fmt.Errorf("neither /proc nor ps available for CPU sampling")
+		}
 		return runAndParseFloat("ps", "-o", "%cpu=", "-p", strconv.Itoa(os.Getpid()))
 	}
 }
@@ -351,4 +381,93 @@ func runAndParseFloat(name string, args ...string) (float64, error) {
 	}
 
 	return strconv.ParseFloat(value, 64)
+}
+
+// isPSAvailable checks once whether the ps command exists in PATH.
+var psAvailable *bool
+
+func isPSAvailable() bool {
+	if psAvailable != nil {
+		return *psAvailable
+	}
+	_, err := exec.LookPath("ps")
+	result := err == nil
+	psAvailable = &result
+	return result
+}
+
+// readProcRSSBytes reads the process RSS from /proc/self/statm (Linux only).
+// Field index 1 is the resident set size in pages.
+func readProcRSSBytes() (uint64, error) {
+	content, err := os.ReadFile("/proc/self/statm")
+	if err != nil {
+		return 0, err
+	}
+	fields := strings.Fields(strings.TrimSpace(string(content)))
+	if len(fields) < 2 {
+		return 0, fmt.Errorf("unexpected /proc/self/statm format")
+	}
+	pages, err := strconv.ParseUint(fields[1], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse RSS pages: %w", err)
+	}
+	return pages * uint64(os.Getpagesize()), nil
+}
+
+// readProcCPUPercent reads a rough CPU usage snapshot from /proc/self/stat (Linux only).
+// This returns the total CPU seconds consumed, which the caller can use for delta-based calculation.
+// For simplicity, we use the Go runtime's NumCPU and process uptime to estimate a percentage.
+func readProcCPUPercent() (float64, error) {
+	content, err := os.ReadFile("/proc/self/stat")
+	if err != nil {
+		return 0, err
+	}
+	// Fields after the comm field (enclosed in parens): find closing paren first
+	closeParen := strings.LastIndex(string(content), ")")
+	if closeParen < 0 {
+		return 0, fmt.Errorf("unexpected /proc/self/stat format")
+	}
+	rest := strings.Fields(string(content)[closeParen+2:])
+	// utime is field index 11, stime is field index 12 (0-based after the state field)
+	if len(rest) < 13 {
+		return 0, fmt.Errorf("unexpected /proc/self/stat field count")
+	}
+	utime, err := strconv.ParseUint(rest[11], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse utime: %w", err)
+	}
+	stime, err := strconv.ParseUint(rest[12], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse stime: %w", err)
+	}
+	// Clock ticks per second (typically 100 on Linux)
+	clockTicks := uint64(100)
+	totalCPUSeconds := float64(utime+stime) / float64(clockTicks)
+
+	// Process start time is field index 19 (in clock ticks since boot)
+	starttime, err := strconv.ParseUint(rest[19], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse starttime: %w", err)
+	}
+
+	// Read system uptime
+	uptimeContent, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		return 0, err
+	}
+	uptimeFields := strings.Fields(string(uptimeContent))
+	if len(uptimeFields) < 1 {
+		return 0, fmt.Errorf("unexpected /proc/uptime format")
+	}
+	systemUptime, err := strconv.ParseFloat(uptimeFields[0], 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse uptime: %w", err)
+	}
+
+	processUptime := systemUptime - float64(starttime)/float64(clockTicks)
+	if processUptime <= 0 {
+		return 0, nil
+	}
+
+	return (totalCPUSeconds / processUptime) * 100, nil
 }

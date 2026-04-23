@@ -94,6 +94,8 @@ type ResourceMonitor struct {
 	readMemoryLimit  func() (uint64, error)
 	readProcessCPU   func() (float64, error)
 	readCPUCapacity  func() (float64, error)
+	memoryErrLogged  bool
+	cpuErrLogged     bool
 }
 
 type Server struct {
