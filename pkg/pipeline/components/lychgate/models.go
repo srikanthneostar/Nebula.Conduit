@@ -6,9 +6,8 @@ import "time"
 type Operation string
 
 const (
-	OperationCreate Operation = "CREATE"
-	OperationUpdate Operation = "UPDATE"
-	OperationDelete Operation = "DELETE"
+	OperationInsertUpdate Operation = "InsertUpdate"
+	OperationDelete       Operation = "Delete"
 )
 
 // RequestStatus represents the status of a system request.
