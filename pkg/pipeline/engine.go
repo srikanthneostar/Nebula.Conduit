@@ -57,12 +57,14 @@ func NewPipelineEngine(
 ) *PipelineEngine {
 	recorder := NewExecutionRecorder(db)
 	logStore := NewLogStore(db)
+	stateStore := NewStateStore(db)
 	executor := NewExecutor(componentFactory)
 
 	if defaultExec, ok := executor.(*defaultExecutor); ok {
 		defaultExec.SetRecorder(recorder)
 		defaultExec.SetBackpressure(backpressure)
 		defaultExec.SetLogStore(logStore)
+		defaultExec.SetStateStore(stateStore)
 	}
 
 	scheduler := NewScheduler(executor)

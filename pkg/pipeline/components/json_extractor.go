@@ -28,6 +28,8 @@ type JSONExtractorComponent struct {
 	config      pipeline.ComponentConfig
 	extractions []ExtractionRule
 	logger      zerolog.Logger
+	stateStore  pipeline.StateStore
+	pipelineID  string
 }
 
 // ExtractionRule defines a single extraction operation
@@ -162,6 +164,22 @@ func (j *JSONExtractorComponent) extract(data *pipeline.Data) error {
 			Str("output_key", rule.OutputKey).
 			Str("value", result).
 			Msg("Extracted value")
+
+		// Persist extracted value so source components can use it on the next run
+		if j.stateStore != nil && j.pipelineID != "" {
+			if err := j.stateStore.SaveState(context.Background(), j.pipelineID, j.config.ID, rule.OutputKey, result); err != nil {
+				j.logger.Warn().Err(err).
+					Str("component_id", j.config.ID).
+					Str("output_key", rule.OutputKey).
+					Msg("Failed to persist extracted value")
+			} else {
+				j.logger.Info().
+					Str("component_id", j.config.ID).
+					Str("output_key", rule.OutputKey).
+					Str("value", result).
+					Msg("Persisted extracted value for next run")
+			}
+		}
 	}
 
 	return nil
@@ -321,5 +339,16 @@ func (j *JSONExtractorComponent) Config() pipeline.ComponentConfig {
 	return j.config
 }
 
+// SetStateStore injects the StateStore dependency.
+func (j *JSONExtractorComponent) SetStateStore(store pipeline.StateStore) {
+	j.stateStore = store
+}
+
+// SetPipelineID injects the pipeline ID for state scoping.
+func (j *JSONExtractorComponent) SetPipelineID(pipelineID string) {
+	j.pipelineID = pipelineID
+}
+
 // Ensure compile-time interface compliance
 var _ pipeline.Component = (*JSONExtractorComponent)(nil)
+var _ pipeline.StateStoreInjectable = (*JSONExtractorComponent)(nil)

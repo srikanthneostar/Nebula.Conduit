@@ -27,6 +27,7 @@ type defaultExecutor struct {
 	recorder     ExecutionRecorder
 	backpressure BackpressureSystem
 	logStore     LogStore
+	stateStore   StateStore
 	instances    map[string]*PipelineInstance
 	mu           sync.RWMutex
 }
@@ -54,6 +55,11 @@ func (e *defaultExecutor) SetBackpressure(bp BackpressureSystem) {
 // SetLogStore sets the log store for print_log components
 func (e *defaultExecutor) SetLogStore(store LogStore) {
 	e.logStore = store
+}
+
+// SetStateStore sets the state store for components that persist state across runs
+func (e *defaultExecutor) SetStateStore(store StateStore) {
+	e.stateStore = store
 }
 
 // emitLog writes a structured log entry to the pipeline_logs table.
@@ -206,6 +212,12 @@ func (e *defaultExecutor) Execute(ctx context.Context, pipeline PipelineDefiniti
 		if injectable, ok := component.(LogStoreInjectable); ok && e.logStore != nil {
 			injectable.SetLogStore(e.logStore)
 			injectable.SetPipelineContext(pipeline.ID, executionID)
+		}
+
+		// Inject StateStore into components that persist state across runs (e.g. http_get)
+		if injectable, ok := component.(StateStoreInjectable); ok && e.stateStore != nil {
+			injectable.SetStateStore(e.stateStore)
+			injectable.SetPipelineID(pipeline.ID)
 		}
 	}
 	fmt.Printf("✓ All components created and validated\n\n")

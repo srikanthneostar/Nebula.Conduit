@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -20,6 +21,8 @@ type HTTPGetComponent struct {
 	headers    map[string]string
 	interval   time.Duration
 	httpClient *http.Client
+	stateStore pipeline.StateStore
+	pipelineID string
 }
 
 // NewHTTPGetComponent creates a new HTTP GET component
@@ -127,15 +130,25 @@ func (h *HTTPGetComponent) Execute(ctx context.Context, input <-chan pipeline.Da
 
 // fetchAndSend performs the HTTP GET request and sends data to output channel
 func (h *HTTPGetComponent) fetchAndSend(ctx context.Context, output chan<- pipeline.Data) error {
+	// Load persisted metadata from previous runs to resolve template variables
+	persistedMeta := h.loadPersistedMetadata(ctx)
+
+	// Resolve template variables in URL; strip query params with unresolved placeholders
+	resolvedURL, decodedURL := resolveURLWithTemplates(h.url, persistedMeta)
+
+	fmt.Printf("HTTPGet[%s]: decoded URL  = %s\n", h.config.ID, decodedURL)
+	fmt.Printf("HTTPGet[%s]: encoded URL  = %s\n", h.config.ID, resolvedURL)
+
 	// Create HTTP request
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, resolvedURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Add headers (no template support for GET as it's a source component)
+	// Add headers with template variable support from persisted state
 	for key, value := range h.headers {
-		req.Header.Set(key, value)
+		resolvedValue := replaceTemplateVars(value, persistedMeta)
+		req.Header.Set(key, resolvedValue)
 	}
 
 	// Execute request
@@ -165,6 +178,11 @@ func (h *HTTPGetComponent) fetchAndSend(ctx context.Context, output chan<- pipel
 		TraceID:   h.config.ID,
 	}
 
+	// Seed metadata with persisted state so downstream components inherit it
+	for k, v := range persistedMeta {
+		data.Metadata[k] = v
+	}
+
 	// Add response metadata
 	data.Metadata["status_code"] = fmt.Sprintf("%d", resp.StatusCode)
 	data.Metadata["content_type"] = resp.Header.Get("Content-Type")
@@ -181,8 +199,11 @@ func (h *HTTPGetComponent) fetchAndSend(ctx context.Context, output chan<- pipel
 
 // fetchAndSendWithData performs HTTP GET with template variables from input data
 func (h *HTTPGetComponent) fetchAndSendWithData(ctx context.Context, inputData pipeline.Data, output chan<- pipeline.Data) error {
-	// Resolve template variables in URL
-	resolvedURL := replaceTemplateVars(h.url, inputData.Metadata)
+	// Resolve template variables in URL; strip query params with unresolved placeholders
+	resolvedURL, decodedURL := resolveURLWithTemplates(h.url, inputData.Metadata)
+
+	fmt.Printf("HTTPGet[%s]: decoded URL  = %s\n", h.config.ID, decodedURL)
+	fmt.Printf("HTTPGet[%s]: encoded URL  = %s\n", h.config.ID, resolvedURL)
 
 	// Create HTTP request with resolved URL
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, resolvedURL, nil)
@@ -233,6 +254,9 @@ func (h *HTTPGetComponent) fetchAndSendWithData(ctx context.Context, inputData p
 	data.Metadata["content_type"] = resp.Header.Get("Content-Type")
 	data.Metadata["content_length"] = fmt.Sprintf("%d", len(body))
 
+	// Persist metadata state for next run
+	h.saveMetadataState(ctx, data.Metadata)
+
 	// Send data to output channel
 	select {
 	case output <- data:
@@ -269,6 +293,56 @@ func (h *HTTPGetComponent) ID() string {
 // Config returns the component configuration
 func (h *HTTPGetComponent) Config() pipeline.ComponentConfig {
 	return h.config
+}
+
+// SetStateStore injects the StateStore dependency for persisting metadata across runs.
+func (h *HTTPGetComponent) SetStateStore(store pipeline.StateStore) {
+	h.stateStore = store
+}
+
+// SetPipelineID injects the pipeline ID for state scoping.
+func (h *HTTPGetComponent) SetPipelineID(pipelineID string) {
+	h.pipelineID = pipelineID
+}
+
+// loadPersistedMetadata loads all previously saved state for this pipeline
+// from any component and returns it as a metadata map. Used in source mode to resolve template vars.
+func (h *HTTPGetComponent) loadPersistedMetadata(ctx context.Context) map[string]string {
+	if h.stateStore == nil || h.pipelineID == "" {
+		return nil
+	}
+	// Load state from all components in this pipeline — the json_extractor
+	// persists values like max_modified under its own component ID, but
+	// http_get needs them to resolve URL templates.
+	state, err := h.stateStore.LoadAllState(ctx, h.pipelineID, "")
+	if err != nil {
+		fmt.Printf("HTTPGet[%s]: failed to load persisted state: %v\n", h.config.ID, err)
+		return nil
+	}
+	if len(state) > 0 {
+		fmt.Printf("HTTPGet[%s]: loaded %d persisted state key(s)\n", h.config.ID, len(state))
+		for k, v := range state {
+			fmt.Printf("HTTPGet[%s]:   %s = %s\n", h.config.ID, k, v)
+		}
+	}
+	return state
+}
+
+// saveMetadataState persists metadata keys that match template variables in the URL.
+func (h *HTTPGetComponent) saveMetadataState(ctx context.Context, metadata map[string]string) {
+	if h.stateStore == nil || h.pipelineID == "" || len(metadata) == 0 {
+		return
+	}
+	for k, v := range metadata {
+		// Only persist keys that are referenced as template vars in the URL
+		if strings.Contains(h.url, "{{"+k+"}}") {
+			if err := h.stateStore.SaveState(ctx, h.pipelineID, h.config.ID, k, v); err != nil {
+				fmt.Printf("HTTPGet[%s]: failed to persist state key %q: %v\n", h.config.ID, k, err)
+			} else {
+				fmt.Printf("HTTPGet[%s]: persisted state %s = %s\n", h.config.ID, k, v)
+			}
+		}
+	}
 }
 
 // HTTPPostComponent sends data via HTTP POST requests
@@ -588,4 +662,77 @@ func replaceTemplateVars(template string, metadata map[string]string) string {
 		result = strings.ReplaceAll(result, placeholder, value)
 	}
 	return result
+}
+
+// resolveURLWithTemplates resolves template variables in a URL and strips any
+// query parameters that still contain unresolved {{...}} placeholders.
+// The URL may be percent-encoded, so we decode parameter values before checking
+// for placeholders, resolve templates, then re-encode the result.
+// Returns (encodedURL, decodedURL) — encoded for the HTTP request, decoded for logging.
+func resolveURLWithTemplates(rawURL string, metadata map[string]string) (string, string) {
+	// Split URL into base and query string
+	parts := strings.SplitN(rawURL, "?", 2)
+	if len(parts) < 2 {
+		// No query string — just replace in the base URL
+		resolved := replaceTemplateVars(rawURL, metadata)
+		if strings.Contains(resolved, "{{") {
+			return rawURL, rawURL
+		}
+		return resolved, resolved
+	}
+
+	base := parts[0]
+	queryStr := parts[1]
+
+	// Parse query parameters properly (handles percent-encoding)
+	params, err := url.ParseQuery(queryStr)
+	if err != nil {
+		// Fallback: plain string replacement if parsing fails
+		fmt.Printf("HTTPGet: failed to parse query string, falling back to plain replacement: %v\n", err)
+		fallback := replaceTemplateVars(rawURL, metadata)
+		return fallback, fallback
+	}
+
+	// Build a new query string, resolving templates and stripping unresolved params
+	result := url.Values{}
+	for key, values := range params {
+		keep := true
+		resolved := make([]string, 0, len(values))
+		for _, v := range values {
+			// Replace template vars in the decoded value
+			r := replaceTemplateVars(v, metadata)
+			if strings.Contains(r, "{{") {
+				fmt.Printf("HTTPGet: stripping query param %q — contains unresolved placeholder\n", key)
+				keep = false
+				break
+			}
+			resolved = append(resolved, r)
+		}
+		if keep {
+			result[key] = resolved
+		}
+	}
+
+	// Also resolve templates in the base URL (unlikely but safe)
+	base = replaceTemplateVars(base, metadata)
+
+	// Build the decoded version for logging (human-readable)
+	var decodedParts []string
+	for key, values := range result {
+		for _, v := range values {
+			decodedParts = append(decodedParts, key+"="+v)
+		}
+	}
+	decoded := base
+	if len(decodedParts) > 0 {
+		decoded = base + "?" + strings.Join(decodedParts, "&")
+	}
+
+	// Build the encoded version for the actual HTTP request
+	encoded := base
+	if len(result) > 0 {
+		encoded = base + "?" + result.Encode()
+	}
+
+	return encoded, decoded
 }
