@@ -15,10 +15,11 @@ const (
 type RequestStatus string
 
 const (
-	RequestStatusPending   RequestStatus = "PENDING"
-	RequestStatusApproved  RequestStatus = "APPROVED"
-	RequestStatusRejected  RequestStatus = "REJECTED"
-	RequestStatusCompleted RequestStatus = "COMPLETED"
+	RequestStatusPending   RequestStatus = "Pending"
+	RequestStatusCompleted RequestStatus = "Completed"
+	RequestStatusFailure   RequestStatus = "Failure"
+	RequestStatusCancelled RequestStatus = "Cancelled"
+	RequestStatusApplied   RequestStatus = "Applied"
 )
 
 // ApplicationSystems represents an application system involved in the request.
